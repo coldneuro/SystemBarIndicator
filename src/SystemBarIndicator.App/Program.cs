@@ -192,6 +192,7 @@ private readonly string _settingsPath = SettingsStore.DefaultPath;
         // brief sensor dropout (null → 0) does not shift the layout.
         private bool _hasCpuTemp;
         private bool _hasGpu;
+        private bool _gpuUsageAvailable;
         private bool _hasGpuTemp;
         private bool _hasGpuVramTemp;
         private bool _hasGpuVramUsage;
@@ -497,12 +498,16 @@ private readonly string _settingsPath = SettingsStore.DefaultPath;
             try
             {
                 _current.CpuUsage = _cpuSensor?.GetUsage() ?? 0f;
+                _current.GpuUsage = 0f;
+                _gpuUsageAvailable = false;
 
                 if (_hardwareSensor != null)
                 {
                     _hardwareSensor.Update();
                     _current.CpuTemperature = _hardwareSensor.GetCpuTemperature() ?? 0f;
-                    _current.GpuUsage = _hardwareSensor.GetGpuUsage() ?? 0f;
+                    float? gpuUsage = _hardwareSensor.GetGpuUsage();
+                    _gpuUsageAvailable = gpuUsage.HasValue;
+                    _current.GpuUsage = gpuUsage ?? 0f;
                     _current.GpuTemperature = _hardwareSensor.GetGpuTemperature() ?? 0f;
                     _current.GpuVramTemperature = _hardwareSensor.GetGpuVramTemperature() ?? 0f;
                     _current.GpuVramUsage = _hardwareSensor.GetGpuVramUsage() ?? 0f;
@@ -516,7 +521,7 @@ private readonly string _settingsPath = SettingsStore.DefaultPath;
                 }
 
                 _hasCpuTemp |= _current.CpuTemperature > 0f;
-                _hasGpu |= _current.GpuUsage > 0f || _current.GpuTemperature > 0f;
+                _hasGpu |= _gpuUsageAvailable || _current.GpuTemperature > 0f;
                 _hasGpuTemp |= _current.GpuTemperature > 0f;
                 _hasGpuVramTemp |= _current.GpuVramTemperature > 0f;
                 _hasGpuVramUsage |= _current.GpuVramUsage > 0f;
@@ -552,8 +557,9 @@ private readonly string _settingsPath = SettingsStore.DefaultPath;
                 float netUl = _netUpEma.Update(_current.NetUp);
                 _netScale.Update(Math.Max(netDl, netUl));
 
-                _trayIcon.Text = string.Format("CPU: {0:F0}% | RAM: {1:F0}% | GPU: {2:F0}%",
-                    _current.CpuUsage, _current.RamUsage, _current.GpuUsage);
+                _trayIcon.Text = string.Format("CPU: {0:F0}% | RAM: {1:F0}% | GPU: {2}",
+                    _current.CpuUsage, _current.RamUsage,
+                    _gpuUsageAvailable ? Formatting.FormatPercent(_current.GpuUsage) : "n/a");
 
                 this.Invalidate();
 
@@ -942,7 +948,8 @@ private readonly string _settingsPath = SettingsStore.DefaultPath;
                 x = Separate(g, x, y, lineHeight, ref anyDrawn);
                 if (gpu)
                 {
-                    x = DrawSection(g, "GPU", Formatting.FormatPercent(_current.GpuUsage), _current.GpuUsage / 100f, x, y, lineHeight);
+                    string gpuText = _gpuUsageAvailable ? Formatting.FormatPercent(_current.GpuUsage) : "n/a";
+                    x = DrawSection(g, "GPU", gpuText, _current.GpuUsage / 100f, x, y, lineHeight);
                     x += ValueGap;
                     trailingGap = ValueGap;
                 }

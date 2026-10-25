@@ -24,6 +24,11 @@ namespace SystemBarIndicator
             Write($"WARN  {message}");
         }
 
+        public static void Info(string message)
+        {
+            Write($"INFO  {message}");
+        }
+
         private static void Write(string line)
         {
             string stamped = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {line}";

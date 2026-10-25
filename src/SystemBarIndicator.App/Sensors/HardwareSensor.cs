@@ -9,6 +9,7 @@ namespace SystemBarIndicator.Sensors
     public class HardwareSensor : IDisposable
     {
         private readonly Computer _computer;
+        private readonly NvidiaGpuUsage? _nvidiaGpuUsage;
 
         public HardwareSensor()
         {
@@ -23,6 +24,11 @@ namespace SystemBarIndicator.Sensors
                 IsStorageEnabled = false
             };
             _computer.Open();
+
+            // NVML is an independent NVIDIA GPU-busy counter, unlike LHM's NVAPI load.
+            // Never assume NVML index 0 matches an NVAPI index if either detects two cards.
+            if (GpuHardware().Count(h => h.HardwareType == HardwareType.GpuNvidia) == 1)
+                _nvidiaGpuUsage = new NvidiaGpuUsage();
         }
 
         /// <summary>
@@ -52,8 +58,9 @@ namespace SystemBarIndicator.Sensors
             // differently, but it has to skip the memory sensors: "GPU Memory" is how full the
             // VRAM is and "GPU Memory Controller" is bus utilisation — neither is the load of
             // the GPU itself, and nothing guarantees which of them is enumerated first.
-            return GetFirstValue(loads.Where(s => s.Name == "GPU Core"))
+            float? lhm = GetFirstValue(loads.Where(s => s.Name == "GPU Core"))
                 ?? GetFirstValue(loads.Where(s => s.Name.Contains("GPU") && !s.Name.Contains("Memory")));
+            return GpuLoad.Prefer(_nvidiaGpuUsage?.Read(), lhm);
         }
 
         public float? GetGpuTemperature()
@@ -113,10 +120,13 @@ namespace SystemBarIndicator.Sensors
             return null;
         }
 
+        // Prefer the discrete NVIDIA device over an integrated AMD/Intel adapter when both
+        // exist; every GPU metric uses the same precedence rather than mixing device order.
         private IEnumerable<IHardware> GpuHardware() => _computer.Hardware
             .Where(h => h.HardwareType == HardwareType.GpuNvidia ||
                         h.HardwareType == HardwareType.GpuAmd ||
-                        h.HardwareType == HardwareType.GpuIntel);
+                        h.HardwareType == HardwareType.GpuIntel)
+            .OrderByDescending(h => h.HardwareType == HardwareType.GpuNvidia);
 
         private IEnumerable<ISensor> GpuSensors() => GpuHardware().SelectMany(h => h.Sensors);
 
@@ -132,6 +142,7 @@ namespace SystemBarIndicator.Sensors
 
         public void Dispose()
         {
+            _nvidiaGpuUsage?.Dispose();
             _computer.Close();
         }
     }
