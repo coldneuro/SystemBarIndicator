@@ -19,7 +19,8 @@ follows the load level. Disk and network are drawn
 as a pair of bars rather than numbers — ▼ is read/download, ▲ is write/upload — smoothed and
 auto-scaled to recent peaks.
 
-Click the bar and it unfolds into the history overlay, covering roughly the last two minutes:
+Click the bar and it unfolds into the history overlay, covering the last 120 samples — two
+minutes at the default 1 s poll interval, one to ten minutes at the others:
 
 <img src="docs/graphs.png" alt="The history overlay above the bar: charts for CPU, CPU temperature, RAM, GPU, GPU temperature, VRAM usage, VRAM temperature, disk read/write and network download/upload" width="420">
 
@@ -199,7 +200,7 @@ This app reads hardware sensors, so it is worth being explicit about what it doe
 | UI | Windows Forms |
 | Runtime | .NET 10 (`net10.0-windows`) |
 | Drawing | GDI+ (`System.Drawing`) |
-| CPU / RAM / disk / network | `PerformanceCounter`, `GlobalMemoryStatusEx`, `NetworkInterface` |
+| CPU / RAM / disk / network | `PerformanceCounter` (CPU falls back to `GetSystemTimes` when counters are unavailable), `GlobalMemoryStatusEx`, `NetworkInterface` |
 | Temperatures and GPU | [LibreHardwareMonitorLib](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) 0.9.6; NVIDIA load, temperature and memory through NVML (`nvml.dll`, part of the driver) |
 | CPU sensor access | [PawnIO](https://pawnio.eu) — signed kernel driver |
 
@@ -209,15 +210,17 @@ This app reads hardware sensors, so it is worth being explicit about what it doe
 src/
 ├── SystemBarIndicator.Core/       # net10.0 — platform-independent, unit-tested
 │   ├── Models/                    #   SensorData, DataPoint, DataHistory
-│   ├── Monitoring/                #   Load levels and thresholds
+│   ├── Monitoring/                #   Load levels, CPU load and temperature picking, VRAM load
 │   ├── Configuration/             #   AppSettings, SettingsStore, WindowPlacement, ColorCodec
-│   └── Util/                      #   Formatting, Ema, AutoScale, SmoothingRates
+│   ├── Updates/                   #   Release tag, asset and checksum rules, failure classes
+│   └── Util/                      #   Formatting, Ema, AutoScale, SmoothingRates, throttling
 └── SystemBarIndicator.App/        # net10.0-windows — WinForms UI + Windows sensors
     ├── Program.cs                 #   Entry point + MainForm (the taskbar bar)
     ├── GraphOverlay.cs            #   History graph overlay
     ├── SettingsForm.cs            #   Appearance settings, live preview
     ├── BarTheme.cs                #   Swappable GDI+ resources (theme, font scale)
     ├── Sensors/                   #   Background poller; Cpu, Ram, Disk, Network, Hardware (LHM, NVML)
+    ├── Updates/                   #   GitHub Releases check and self-update
     └── Logging/Logger.cs          #   File logger
 
 tests/SystemBarIndicator.Tests/    # net10.0 — xUnit, covers Core

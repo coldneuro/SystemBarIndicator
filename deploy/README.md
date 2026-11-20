@@ -64,7 +64,7 @@ task to be registered under a mojibake folder name. Keep executable `.ps1` text 
 ## Releasing
 
 Maintainer steps for cutting a version. All of it is manual: CI builds and tests, it does
-not publish.
+not publish. Every command below runs from the repository root.
 
 1. Bump `<Version>` in `Directory.Build.props`. It stamps the assembly, so the exe reports
    the same number as the tag.
@@ -86,9 +86,9 @@ not publish.
 
    ```powershell
    $stage = "$env:TEMP\SystemBarIndicator-X.Y.Z"
-   dotnet publish ..\src\SystemBarIndicator.App -c Release -r win-x64 --self-contained false `
+   dotnet publish src\SystemBarIndicator.App -c Release -r win-x64 --self-contained false `
        -p:PublishSingleFile=false -p:PublishReadyToRun=false -o $stage
-   Copy-Item ..\LICENSE -Destination $stage
+   Copy-Item LICENSE -Destination $stage
    # write $stage\README.txt as well
    Compress-Archive -Path $stage -DestinationPath "$env:TEMP\SystemBarIndicator-win-x64.zip"
    ```
