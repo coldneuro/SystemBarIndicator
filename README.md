@@ -223,7 +223,7 @@ src/
     ├── Updates/                   #   GitHub Releases check and self-update
     └── Logging/Logger.cs          #   File logger
 
-tests/SystemBarIndicator.Tests/    # net10.0 — xUnit, covers Core
+tests/SystemBarIndicator.Tests/    # net10.0 — xUnit v3, covers Core
 deploy/                            # Install/Uninstall scripts (see deploy/README.md)
 ```
 
@@ -235,7 +235,7 @@ detailed architecture notes — the non-obvious constraints behind the current d
 
 ```powershell
 dotnet build -c Release      # warnings are errors — see Directory.Build.props
-dotnet test  -c Release      # xUnit
+dotnet test  -c Release      # xUnit v3
 ```
 
 CI runs the same two commands on `windows-latest` for every push and pull request.
