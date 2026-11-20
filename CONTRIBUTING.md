@@ -13,9 +13,10 @@ dotnet run --project src/SystemBarIndicator.App
 ```
 
 You need the .NET 10 SDK and Windows. Running from `dotnet run` gives you an unelevated
-process, so temperatures will be missing — that is expected, and it is the quickest way to
-work on everything else. To test the temperature path, install with
-`pwsh -File deploy/Install.ps1` and launch through the desktop shortcut.
+process, so the CPU temperature will be missing (GPU temperatures still show on NVIDIA
+cards) — that is expected, and it is the quickest way to work on everything else. To test
+the CPU temperature path, install with `pwsh -File deploy/Install.ps1` and launch through the
+desktop shortcut.
 
 ## Ground rules
 

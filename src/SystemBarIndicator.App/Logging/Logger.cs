@@ -56,7 +56,18 @@ namespace SystemBarIndicator
                     Directory.CreateDirectory(Path.GetDirectoryName(_logPath)!);
                     var info = new FileInfo(_logPath);
                     if (info.Exists && info.Length > MaxLogBytes)
-                        File.Move(_logPath, _previousLogPath, overwrite: true);
+                    {
+                        try
+                        {
+                            File.Move(_logPath, _previousLogPath, overwrite: true);
+                        }
+                        catch
+                        {
+                            // The log is held open by someone (a viewer without delete
+                            // sharing): keep appending and roll over on a later write, rather
+                            // than dropping every line until the handle is released.
+                        }
+                    }
                     File.AppendAllText(_logPath, stamped + Environment.NewLine);
                 }
             }

@@ -222,6 +222,37 @@ private readonly string _settingsPath = SettingsStore.DefaultPath;
         public bool HasGpuVramUsageSensor => _hasGpuVramUsage;
         public bool HasDiskSensor => _diskAvailable;
 
+        /// <summary>
+        /// Why the CPU temperature is missing (not elevated, no PawnIO, or neither), for the
+        /// settings window and the log; null while it is available.
+        /// </summary>
+        public string? CpuTempUnavailableReason =>
+            _hasCpuTemp ? null : CpuTemperatureDiagnosis.Explain(IsElevated(), IsPawnIoInstalled());
+
+        private static bool IsElevated()
+        {
+            // Under UAC an administrator's normal token is not in the Administrators role,
+            // which is exactly the distinction that matters here.
+            using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+            return new System.Security.Principal.WindowsPrincipal(identity)
+                .IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+        }
+
+        private static bool IsPawnIoInstalled()
+        {
+            try
+            {
+                // LibreHardwareMonitor's own check (its uninstall registry entry), so the
+                // answer matches what the library will actually find.
+                return LibreHardwareMonitor.PawnIo.PawnIo.IsInstalled;
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"could not tell whether PawnIO is installed: {ex.Message}");
+                return false;
+            }
+        }
+
         private SensorData GetCurrentData() => _current;
 
         public MainForm()
@@ -296,6 +327,7 @@ private readonly string _settingsPath = SettingsStore.DefaultPath;
             if (AutoUpdateSupported)
             {
                 UpdateInstaller.TryCleanStaging(); // leftovers of the update that started this build
+                ReportLastUpdateAttempt();
                 _updateCheckTimer.Start();
             }
         }
@@ -319,6 +351,8 @@ private readonly string _settingsPath = SettingsStore.DefaultPath;
             // The first read happens here, synchronously, so the first frame already shows
             // real values and the right sections; from then on the poller's thread reads.
             ApplyReading(_poller.ReadOnce());
+            if (!_hasCpuTemp)
+                Logger.Info($"CPU temperature unavailable: {CpuTempUnavailableReason}");
             MaybeShowPerfCounterNotice();
             _poller.Start(OnReadingFromPoller);
         }
@@ -635,6 +669,18 @@ private readonly string _settingsPath = SettingsStore.DefaultPath;
                 }
                 else
                 {
+                    // The swap script restarts the app whether or not the files went in, so an
+                    // install that cannot take would otherwise repeat on every start, a minute
+                    // apart. A check the user asked for is never held back.
+                    var last = UpdateInstaller.ReadLastAttempt();
+                    if (last != null && last.Suppresses(update.Version, UpdateChecker.CurrentVersion(), DateTime.UtcNow))
+                    {
+                        Logger.Warn($"update: not installing {update.Version.ToString(3)} again yet — the attempt at " +
+                                    $"{last.AttemptedUtc.ToLocalTime():yyyy-MM-dd HH:mm} did not take; " +
+                                    $"retrying after {(last.AttemptedUtc + UpdateAttempt.RetryAfter).ToLocalTime():yyyy-MM-dd HH:mm}");
+                        return;
+                    }
+
                     _trayIcon.ShowBalloonTip(5000, "SystemBar Indicator",
                         $"Updating to version {update.Version.ToString(3)}...", ToolTipIcon.Info);
                 }
@@ -660,6 +706,29 @@ private readonly string _settingsPath = SettingsStore.DefaultPath;
             {
                 _updateBusy = false;
             }
+        }
+
+        /// <summary>
+        /// Settles the record of the last install on startup: forgotten if this build is
+        /// that version (or newer), logged if it is not — the swap failed or the release's
+        /// assembly version does not match its tag. The record itself stays until then, so
+        /// the next automatic check does not install the same version straight away.
+        /// </summary>
+        private static void ReportLastUpdateAttempt()
+        {
+            var last = UpdateInstaller.ReadLastAttempt();
+            if (last == null)
+                return;
+
+            var current = UpdateChecker.CurrentVersion();
+            if (last.Succeeded(current))
+            {
+                UpdateInstaller.ClearLastAttempt();
+                return;
+            }
+
+            Logger.Warn($"update: the install of {last.Version.ToString(3)} at {last.AttemptedUtc.ToLocalTime():yyyy-MM-dd HH:mm} " +
+                        $"did not take — this build reports {current.ToString(3)}");
         }
 
         /// <summary>

@@ -89,9 +89,10 @@ namespace SystemBarIndicator.Sensors
                 }
                 catch
                 {
-                    // The interface went away since the list was built: skip it this tick
-                    // and rebuild the list on the next one.
-                    _refreshRequested = true;
+                    // Skipped this tick. Not a reason to rebuild the list: an interface that
+                    // really went away raises a NetworkChange event (and the 30 s refresh
+                    // catches the rest), while one that merely fails every call would
+                    // otherwise force a full enumeration on every tick.
                 }
             }
 
@@ -112,6 +113,16 @@ namespace SystemBarIndicator.Sensors
                              ni.NetworkInterfaceType != NetworkInterfaceType.Loopback &&
                              ni.NetworkInterfaceType != NetworkInterfaceType.Tunnel)
                 .ToArray();
+
+            // Forget the counters of interfaces that are gone. One that comes back later
+            // starts from a fresh baseline instead of reporting everything it moved while
+            // away as a single tick's worth of traffic (a spike that also inflates the
+            // auto-scale peak for minutes).
+            var current = new HashSet<string>(_interfaces.Select(ni => ni.Id));
+            foreach (var id in _prevReceived.Keys.Where(id => !current.Contains(id)).ToList())
+                _prevReceived.Remove(id);
+            foreach (var id in _prevSent.Keys.Where(id => !current.Contains(id)).ToList())
+                _prevSent.Remove(id);
         }
 
         private void OnNetworkChanged(object? sender, EventArgs e) => _refreshRequested = true;

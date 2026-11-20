@@ -29,6 +29,53 @@ namespace SystemBarIndicator.Updates
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "SystemBarIndicator", "update");
 
+        // Outside the staging folder on purpose: staging is wiped on every start, and this
+        // record has to survive exactly that start (see UpdateAttempt).
+        private static string AttemptPath => Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "SystemBarIndicator", "update-attempt.txt");
+
+        /// <summary>The last install handed to the swap script, or null. Never throws.</summary>
+        public static UpdateAttempt? ReadLastAttempt()
+        {
+            try
+            {
+                return File.Exists(AttemptPath) ? UpdateAttempt.Parse(File.ReadAllText(AttemptPath)) : null;
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"update: could not read the last attempt record: {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>Forgets the last attempt once it is resolved. Never throws.</summary>
+        public static void ClearLastAttempt()
+        {
+            try
+            {
+                File.Delete(AttemptPath);
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"update: could not delete the last attempt record: {ex.Message}");
+            }
+        }
+
+        private static void RecordAttempt(Version version)
+        {
+            // Best effort: losing the record only costs the protection against a retry loop,
+            // it must not cost the update itself.
+            try
+            {
+                File.WriteAllText(AttemptPath, new UpdateAttempt(version, DateTime.UtcNow).Format(), Encoding.ASCII);
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"update: could not record the attempt: {ex.Message}");
+            }
+        }
+
         /// <summary>
         /// Stages the update and starts the swap script. True means the script is running
         /// and the app must exit now so its files can be replaced.
@@ -84,6 +131,7 @@ namespace SystemBarIndicator.Updates
             psi.ArgumentList.Add("-LogPath");
             psi.ArgumentList.Add(Logger.LogPath);
 
+            RecordAttempt(info.Version);
             using var process = Process.Start(psi);
             return process != null;
         }
@@ -180,12 +228,40 @@ namespace SystemBarIndicator.Updates
                     } catch { }
                 }
 
-                # The files can stay locked for a moment after the process object dies.
-                function Copy-Tree([string]$From, [string]$To) {
+                # Paths are literal throughout: -Path reads [ and ] in a folder name as a
+                # wildcard, and a pattern that matches nothing copies nothing without an error.
+                # Both functions retry: files can stay locked for a moment after the process
+                # object dies.
+
+                # Copies the contents of $From into $To, merging with what is there.
+                function Copy-Contents([string]$From, [string]$To) {
                     for ($i = 0; $i -lt 10; $i++) {
                         try {
-                            New-Item -ItemType Directory -Path $To -Force | Out-Null
-                            Copy-Item -Path (Join-Path $From '*') -Destination $To -Recurse -Force -ErrorAction Stop
+                            [System.IO.Directory]::CreateDirectory($To) | Out-Null
+                            Get-ChildItem -LiteralPath $From -Force -ErrorAction Stop |
+                                Copy-Item -Destination $To -Recurse -Force -ErrorAction Stop
+                            return $true
+                        } catch {
+                            $script:LastError = $_.Exception.Message
+                            Start-Sleep -Seconds 1
+                        }
+                    }
+                    return $false
+                }
+
+                # Saves into $Into only the items of $Target that the update will overwrite.
+                # The app may live in a shared folder (Downloads, say): copying everything there
+                # would be slow, and one unrelated locked file would abandon the update.
+                function Backup-Overwritten([string]$From, [string]$Target, [string]$Into) {
+                    for ($i = 0; $i -lt 10; $i++) {
+                        try {
+                            [System.IO.Directory]::CreateDirectory($Into) | Out-Null
+                            foreach ($item in Get-ChildItem -LiteralPath $From -Force -ErrorAction Stop) {
+                                $existing = Join-Path $Target $item.Name
+                                if (Test-Path -LiteralPath $existing) {
+                                    Copy-Item -LiteralPath $existing -Destination $Into -Recurse -Force -ErrorAction Stop
+                                }
+                            }
                             return $true
                         } catch {
                             $script:LastError = $_.Exception.Message
@@ -198,15 +274,16 @@ namespace SystemBarIndicator.Updates
                 # Wait for the app to let go of its files.
                 Wait-Process -Id $OwnerPid -Timeout 60 -ErrorAction SilentlyContinue
 
-                # Back up the current build first: a copy that fails halfway would otherwise
-                # leave a mix of old and new files that may not start at all.
-                if (-not (Copy-Tree $Target $Backup)) {
+                # Back up first: a copy that fails halfway would otherwise leave a mix of old
+                # and new files that may not start at all. Files that only the new build has
+                # are left behind by a rollback; the old build ignores them.
+                if (-not (Backup-Overwritten $Source $Target $Backup)) {
                     Write-Log 'ERROR' "could not back up the installed build, update abandoned: $script:LastError"
-                } elseif (Copy-Tree $Source $Target) {
+                } elseif (Copy-Contents $Source $Target) {
                     Write-Log 'WARN ' "installed the update from $Source"
                 } else {
                     Write-Log 'ERROR' "could not copy the update, restoring the previous build: $script:LastError"
-                    if (-not (Copy-Tree $Backup $Target)) {
+                    if (-not (Copy-Contents $Backup $Target)) {
                         Write-Log 'ERROR' "restoring the previous build failed as well: $script:LastError"
                     }
                 }

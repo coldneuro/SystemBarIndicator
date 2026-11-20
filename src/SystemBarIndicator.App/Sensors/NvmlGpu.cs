@@ -126,7 +126,18 @@ namespace SystemBarIndicator.Sensors
                     return OpenResult.Failed;
                 }
 
-                gpu = new NvmlGpu(device);
+                // Opened only if the reading the bar depends on actually works: after a
+                // driver reset NVML can initialise yet keep failing queries, and calling that
+                // "open" made the caller flip between NVML and its fallback every retry.
+                var opened = new NvmlGpu(device);
+                if (!opened.Load.HasValue)
+                {
+                    opened.Dispose();
+                    reason = "NVML opened but does not report GPU load";
+                    return OpenResult.Failed;
+                }
+
+                gpu = opened;
                 reason = "";
                 return OpenResult.Opened;
             }

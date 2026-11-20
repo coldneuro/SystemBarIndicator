@@ -39,6 +39,8 @@ namespace SystemBarIndicator
         private readonly ComboBox _interval = new();
         private readonly CheckBox _fahrenheit = new();
         private readonly CheckBox _autoUpdate = new();
+        // Says why a section is "(n/a)" where the app can tell (the CPU temperature).
+        private readonly ToolTip _tips = new() { AutoPopDelay = 20000 };
 
         private static readonly string[] ThemeItems = { ThemeNames.Dark, ThemeNames.Light, ThemeNames.Custom };
 
@@ -113,7 +115,10 @@ namespace SystemBarIndicator
 
             // Listed in the order the sections appear in the bar.
             SetUpCheck(_showCpu, "CPU", new Rectangle(14, 24, 160, 22), available: true, box);
-            SetUpCheck(_showCpuTemp, "CPU temperature", new Rectangle(180, 24, 165, 22), _owner.HasCpuTempSensor, box);
+            SetUpCheck(_showCpuTemp, "CPU temperature", new Rectangle(180, 24, 165, 22), _owner.HasCpuTempSensor, box,
+                _owner.CpuTempUnavailableReason is { } why
+                    ? $"CPU temperature is unavailable: {why}.{Environment.NewLine}See Troubleshooting in the README."
+                    : null);
             SetUpCheck(_showRam, "RAM", new Rectangle(14, 50, 160, 22), available: true, box);
             SetUpCheck(_showGpu, "GPU", new Rectangle(180, 50, 165, 22), _owner.HasGpuSensor, box);
             SetUpCheck(_showGpuTemp, "GPU temperature", new Rectangle(14, 76, 160, 22), _owner.HasGpuTempSensor, box);
@@ -129,9 +134,12 @@ namespace SystemBarIndicator
         // later (after installing PawnIO, say), and the setting must survive that.
         // AutoSize rather than a fixed width: a label longer than the column would otherwise
         // be clipped, and DPI scaling changes the text width on top of that.
-        private void SetUpCheck(CheckBox check, string text, Rectangle bounds, bool available, GroupBox box)
+        private void SetUpCheck(CheckBox check, string text, Rectangle bounds, bool available, GroupBox box,
+            string? whyUnavailable = null)
         {
             check.Text = available ? text : text + " (n/a)";
+            if (!available && whyUnavailable != null)
+                _tips.SetToolTip(check, whyUnavailable);
             check.AutoSize = true;
             check.Location = bounds.Location;
             check.CheckedChanged += (s, e) => Apply();
@@ -272,6 +280,13 @@ namespace SystemBarIndicator
 
             _working = s;
             _owner.ApplySettings(s);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+                _tips.Dispose();
+            base.Dispose(disposing);
         }
     }
 }

@@ -6,9 +6,15 @@
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <PublishSingleFile>true</PublishSingleFile>
+    <!-- The defaults match what is shipped (deploy/Install.ps1, the release procedure), so a
+         bare `dotnet publish` gives the same layout. Single-file stays off: LHM is a
+         RID-split package and is shipped as a flat folder. ReadyToRun stays off: measured on
+         this app it saved ~10 % of start-up (window after ~2.3 s instead of ~2.6 s) and
+         nothing afterwards, for +3 MB — start-up is dominated by LibreHardwareMonitor
+         initialising the hardware, not by JIT. -->
+    <PublishSingleFile>false</PublishSingleFile>
     <SelfContained>false</SelfContained>
-    <PublishReadyToRun>true</PublishReadyToRun>
+    <PublishReadyToRun>false</PublishReadyToRun>
     <AssemblyName>SystemBarIndicator</AssemblyName>
     <RootNamespace>SystemBarIndicator</RootNamespace>
     <ApplicationIcon>appicon.ico</ApplicationIcon>

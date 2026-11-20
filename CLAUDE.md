@@ -74,7 +74,11 @@ dotnet run --project src/SystemBarIndicator.App   # run the app
   `Core (Tctl)` (AMD Zen; Tctl carries a fan-control offset on some models), `Core Max`,
   `CPU Cores` (older AMD) — and only then the hottest core-like reading. The old loose
   `Contains("Core")` filter also matched `CPU Core #N Distance to TjMax`, which is headroom
-  below the throttling point, not a temperature; such sensors are always excluded.
+  below the throttling point, not a temperature; such sensors are always excluded. When no
+  reading appears, `MainForm.CpuTempUnavailableReason` says why — not elevated
+  (`WindowsPrincipal`, false under UAC's split token), PawnIO missing
+  (`LibreHardwareMonitor.PawnIo.PawnIo.IsInstalled`, the library's own check), or neither
+  (`Core/Monitoring/CpuTemperatureDiagnosis`, tested) — as a settings tooltip and one log line.
 - **NVIDIA through NVML.** LHM's NVIDIA `Update()` measured ~85 ms wall / ~35 ms CPU per
   call: it refreshes clocks, fans, power topology, voltages and D3DKMT statistics through
   NVAPI, and takes two `nvmlDeviceGetPcieThroughput` samples that block ~20 ms each; on some
@@ -198,7 +202,15 @@ dotnet run --project src/SystemBarIndicator.App   # run the app
   build over it with retries (restoring the backup if that fails, so no half-old/half-new
   mix is left), writes the outcome to `app.log`, and **always** restarts via
   `schtasks /run` (fallback: plain `Start-Process`, unelevated) — a failed update must not
-  leave the user without the bar. The release shape the updater relies on is documented in
+  leave the user without the bar. Because it always restarts, an install that cannot take
+  (a locked file, a release whose `<Version>` was not bumped to match its tag) would repeat
+  on every start a minute apart; `UpdateInstaller` therefore records each attempt in
+  `%LOCALAPPDATA%\SystemBarIndicator\update-attempt.txt` (outside the staging folder, which
+  is wiped on start), and `Core/Updates/UpdateAttempt` (tested) holds back an automatic
+  install of the same version for a day while the running build is still older. A manual
+  check is never held back. The script backs up only the items the update overwrites (the
+  folder may be shared, e.g. Downloads) and uses literal paths throughout (`[`/`]` in a
+  folder name would otherwise act as a wildcard and silently match nothing). The release shape the updater relies on is documented in
   `deploy/README.md#releasing`. Failed checks are classified by `Core/Updates/UpdateFailures`
   and de-duplicated on its stable `Key`: `EnsureSuccessStatusCode` raises the same
   `HttpRequestException` as a dead connection, so severity comes from `StatusCode` (null =
@@ -224,7 +236,9 @@ dotnet run --project src/SystemBarIndicator.App   # run the app
 - **Desktop deployment.** `LibreHardwareMonitorLib` 0.9.6 is a RID-split package (the real
   assemblies live in `runtimes/<rid>/lib/<tfm>/`). To get a clean flat layout of a single
   version, publish with a RID into a separate folder (outside OneDrive):
-  `dotnet publish src/SystemBarIndicator.App -c Release -r win-x64 --self-contained false -p:PublishSingleFile=false -o <folder>`.
+  `dotnet publish src/SystemBarIndicator.App -c Release -r win-x64 --self-contained false -p:PublishSingleFile=false -p:PublishReadyToRun=false -o <folder>`
+  (both flags are also the `.csproj` defaults; ReadyToRun was measured and is not worth its
+  size here — see the comment there).
   The regular `bin` sits in OneDrive and its contents can drift — do not rely on it.
   The full reproducible install is `deploy/Install.ps1` (see `deploy/README.md`).
 - **Running as administrator without UAC.** The app needs admin rights (the PawnIO driver),

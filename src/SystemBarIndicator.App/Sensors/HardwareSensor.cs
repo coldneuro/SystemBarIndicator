@@ -47,7 +47,21 @@ namespace SystemBarIndicator.Sensors
                 IsStorageEnabled = false
             };
             _computer.Open();
+            try
+            {
+                InitGpuSource();
+            }
+            catch
+            {
+                // Close what Open() started (its drivers and handles) before failing.
+                _nvml?.Dispose();
+                _computer.Close();
+                throw;
+            }
+        }
 
+        private void InitGpuSource()
+        {
             // NVML's device index is only known to be the card LHM reports when there is a
             // single NVIDIA card; with two, the readings could come from different GPUs.
             int nvidia = _computer.Hardware.Count(h => h.HardwareType == HardwareType.GpuNvidia);
@@ -173,7 +187,12 @@ namespace SystemBarIndicator.Sensors
         /// <summary>VRAM temperature: "GPU Memory Junction" on NVIDIA, "GPU Memory" on AMD.</summary>
         public float? GetGpuVramTemperature()
         {
-            return GetFirstValue(GpuSensors()
+            // With NVML in use the other GPUs are never refreshed, so their sensors hold
+            // whatever the first read left there: only the NVIDIA card may answer.
+            var gpus = _nvml != null
+                ? GpuHardware().Where(h => h.HardwareType == HardwareType.GpuNvidia)
+                : GpuHardware();
+            return GetFirstValue(gpus.SelectMany(h => h.Sensors)
                 .Where(s => s.SensorType == SensorType.Temperature && s.Name.Contains("Memory")));
         }
 

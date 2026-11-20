@@ -143,7 +143,9 @@ defaults rather than failing to start.
 **CPU temperature reads 0.** The CPU temperature comes from LibreHardwareMonitor, which
 reads it through the kernel-level [PawnIO](https://pawnio.eu) driver — on AMD as well as
 Intel. Install PawnIO once and run the app elevated (option 2 above). GPU temperatures need
-neither: on NVIDIA cards they show up even in an unelevated run.
+neither: on NVIDIA cards they show up even in an unelevated run. When the CPU temperature is
+missing, hover over *CPU temperature (n/a)* in the settings — the tooltip says which of the two
+is missing — and `app.log` records the same at start-up.
 
 **NVIDIA GPU load looks wrong (stuck at 0 %, or not matching other tools).** With a single
 NVIDIA card the load, temperature and memory come from NVML, the library `nvidia-smi` is

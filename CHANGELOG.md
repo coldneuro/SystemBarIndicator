@@ -7,6 +7,28 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- An automatic update that could not be installed no longer repeats every minute: since
+  1.3.0 restarts the bar whatever happens, a persistent failure (or a release whose version
+  number does not match its tag) made it download, install and restart in a loop. The same
+  version is now retried once a day; **Check for Updates...** always tries.
+- Updating no longer backs up everything in the folder the app runs from — only its own
+  files — so an unrelated locked file there cannot stop the update, and a folder name with
+  `[` or `]` no longer leaves the backup silently empty.
+- `app.log` stopped recording anything once it passed 1 MB while another program held it
+  open; it now keeps writing and rolls over later.
+- A network adapter that disappeared and came back no longer reports everything it moved
+  in the meantime as a single spike.
+- NVML that starts but cannot read the GPU load is no longer treated as working, which
+  filled the log with a switch back and forth every 30 seconds.
+
+### Changed
+
+- The settings window says why the CPU temperature is `(n/a)` — not running as
+  administrator, PawnIO not installed, or neither — in a tooltip, and `app.log` records it at
+  start-up.
+
 ## [1.3.0] - 2026-11-20
 
 ### Fixed
