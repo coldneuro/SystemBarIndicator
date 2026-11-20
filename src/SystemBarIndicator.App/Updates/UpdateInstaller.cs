@@ -22,6 +22,9 @@ namespace SystemBarIndicator.Updates
         private const string TaskName = "SystemBarIndicator";
         private const string ExeName = "SystemBarIndicator.exe";
 
+        // Generous for an archive of a few tens of megabytes, yet finite.
+        private static readonly TimeSpan DownloadTimeout = TimeSpan.FromMinutes(10);
+
         private static string StagingRoot => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "SystemBarIndicator", "update");
@@ -36,9 +39,16 @@ namespace SystemBarIndicator.Updates
             TryCleanStaging();
             Directory.CreateDirectory(staging);
 
+            // HttpClient.Timeout stops at the response headers: with ResponseHeadersRead the
+            // body is streamed afterwards and nothing bounds it, so a stalled download would
+            // hang forever — and with it the "one update at a time" guard, which would block
+            // every later check until the app restarts.
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            deadline.CancelAfter(DownloadTimeout);
+
             string zipPath = Path.Combine(staging, info.ZipAssetName);
-            await DownloadAsync(info.ZipUrl, zipPath, ct).ConfigureAwait(false);
-            await VerifyAsync(info, zipPath, ct).ConfigureAwait(false);
+            await DownloadAsync(info.ZipUrl, zipPath, deadline.Token).ConfigureAwait(false);
+            await VerifyAsync(info, zipPath, deadline.Token).ConfigureAwait(false);
 
             // ExtractToDirectory refuses entries that escape the destination (zip-slip).
             string extracted = Path.Combine(staging, "extracted");
@@ -67,8 +77,12 @@ namespace SystemBarIndicator.Updates
             psi.ArgumentList.Add(source);
             psi.ArgumentList.Add("-Target");
             psi.ArgumentList.Add(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar));
+            psi.ArgumentList.Add("-Backup");
+            psi.ArgumentList.Add(Path.Combine(staging, "backup"));
             psi.ArgumentList.Add("-TaskName");
             psi.ArgumentList.Add(TaskName);
+            psi.ArgumentList.Add("-LogPath");
+            psi.ArgumentList.Add(Logger.LogPath);
 
             using var process = Process.Start(psi);
             return process != null;
@@ -151,31 +165,59 @@ namespace SystemBarIndicator.Updates
                     [Parameter(Mandatory = $true)][int]$OwnerPid,
                     [Parameter(Mandatory = $true)][string]$Source,
                     [Parameter(Mandatory = $true)][string]$Target,
-                    [Parameter(Mandatory = $true)][string]$TaskName
+                    [Parameter(Mandatory = $true)][string]$Backup,
+                    [Parameter(Mandatory = $true)][string]$TaskName,
+                    [Parameter(Mandatory = $true)][string]$LogPath
                 )
+
+                $script:LastError = ''
+
+                # Same line format as the app's own log.
+                function Write-Log([string]$Level, [string]$Message) {
+                    try {
+                        $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+                        Add-Content -LiteralPath $LogPath -Value "$stamp $Level [swap.ps1] $Message" -Encoding ASCII
+                    } catch { }
+                }
+
+                # The files can stay locked for a moment after the process object dies.
+                function Copy-Tree([string]$From, [string]$To) {
+                    for ($i = 0; $i -lt 10; $i++) {
+                        try {
+                            New-Item -ItemType Directory -Path $To -Force | Out-Null
+                            Copy-Item -Path (Join-Path $From '*') -Destination $To -Recurse -Force -ErrorAction Stop
+                            return $true
+                        } catch {
+                            $script:LastError = $_.Exception.Message
+                            Start-Sleep -Seconds 1
+                        }
+                    }
+                    return $false
+                }
 
                 # Wait for the app to let go of its files.
                 Wait-Process -Id $OwnerPid -Timeout 60 -ErrorAction SilentlyContinue
 
-                # The files can stay locked for a moment after the process object dies.
-                $copied = $false
-                for ($i = 0; $i -lt 10; $i++) {
-                    try {
-                        Copy-Item -Path (Join-Path $Source '*') -Destination $Target -Recurse -Force -ErrorAction Stop
-                        $copied = $true
-                        break
-                    } catch {
-                        Start-Sleep -Seconds 1
+                # Back up the current build first: a copy that fails halfway would otherwise
+                # leave a mix of old and new files that may not start at all.
+                if (-not (Copy-Tree $Target $Backup)) {
+                    Write-Log 'ERROR' "could not back up the installed build, update abandoned: $script:LastError"
+                } elseif (Copy-Tree $Source $Target) {
+                    Write-Log 'WARN ' "installed the update from $Source"
+                } else {
+                    Write-Log 'ERROR' "could not copy the update, restoring the previous build: $script:LastError"
+                    if (-not (Copy-Tree $Backup $Target)) {
+                        Write-Log 'ERROR' "restoring the previous build failed as well: $script:LastError"
                     }
                 }
 
-                if ($copied) {
-                    # The scheduled task restarts the app elevated without a UAC prompt; a
-                    # copy installed without the task is started directly instead.
-                    schtasks.exe /run /tn $TaskName 2>$null | Out-Null
-                    if ($LASTEXITCODE -ne 0) {
-                        Start-Process -FilePath (Join-Path $Target 'SystemBarIndicator.exe')
-                    }
+                # Restart whatever ended up installed, even after a failure: an update that
+                # did not take must not leave the user without the bar.
+                # The scheduled task restarts the app elevated without a UAC prompt; a copy
+                # installed without the task is started directly instead.
+                schtasks.exe /run /tn $TaskName 2>$null | Out-Null
+                if ($LASTEXITCODE -ne 0) {
+                    Start-Process -FilePath (Join-Path $Target 'SystemBarIndicator.exe')
                 }
                 """;
 

@@ -1,15 +1,22 @@
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.Linq;
 
 namespace SystemBarIndicator.Sensors
 {
+    /// <summary>
+    /// Disk throughput across all physical disks, read from the <c>_Total</c> instance of the
+    /// PhysicalDisk counters. Per-disk instances are deliberately not used: their names are
+    /// renumbered whenever a drive comes or goes (a USB disk, a resume from sleep), and a
+    /// counter bound to a vanished instance throws "Instance 'N' does not exist" — which used
+    /// to switch the section off for the rest of the run. <c>_Total</c> survives that.
+    /// </summary>
     public class DiskSensor : IDisposable
     {
-        private readonly List<PerformanceCounter> _readCounters = new();
-        private readonly List<PerformanceCounter> _writeCounters = new();
-        private readonly List<PerformanceCounter> _usageCounters = new();
+        private const string Category = "PhysicalDisk";
+        private const string TotalInstance = "_Total";
+
+        private PerformanceCounter? _read;
+        private PerformanceCounter? _write;
 
         /// <summary>
         /// False once the counters are known to be unusable — at construction or later.
@@ -22,20 +29,12 @@ namespace SystemBarIndicator.Sensors
         {
             try
             {
-                var category = new PerformanceCounterCategory("PhysicalDisk");
-                var instances = category.GetInstanceNames()
-                    .Where(name => !name.Equals("_total", StringComparison.OrdinalIgnoreCase))
-                    .ToList();
+                _read = new PerformanceCounter(Category, "Disk Read Bytes/sec", TotalInstance);
+                _write = new PerformanceCounter(Category, "Disk Write Bytes/sec", TotalInstance);
 
-                foreach (var instance in instances)
-                {
-                    _readCounters.Add(new PerformanceCounter("PhysicalDisk", "Disk Read Bytes/sec", instance));
-                    _writeCounters.Add(new PerformanceCounter("PhysicalDisk", "Disk Write Bytes/sec", instance));
-                    _usageCounters.Add(new PerformanceCounter("PhysicalDisk", "% Disk Time", instance));
-                }
-
-                foreach (var c in AllCounters())
-                    c.NextValue();
+                // The first reading primes a rate counter and is always 0.
+                _read.NextValue();
+                _write.NextValue();
             }
             catch
             {
@@ -44,27 +43,17 @@ namespace SystemBarIndicator.Sensors
                 throw;
             }
 
-            Available = _readCounters.Count > 0;
+            Available = true;
         }
 
-        public (float readMBps, float writeMBps, float usagePercent) GetInfo()
+        public (float readMBps, float writeMBps) GetInfo()
         {
-            if (!Available)
-                return (0, 0, 0);
-
-            int count = _readCounters.Count;
+            if (!Available || _read == null || _write == null)
+                return (0, 0);
 
             try
             {
-                float totalRead = 0, totalWrite = 0, totalUsage = 0;
-                for (int i = 0; i < count; i++)
-                {
-                    totalRead += _readCounters[i].NextValue();
-                    totalWrite += _writeCounters[i].NextValue();
-                    totalUsage += _usageCounters[i].NextValue();
-                }
-
-                return (totalRead / 1048576f, totalWrite / 1048576f, totalUsage / count);
+                return (_read.NextValue() / 1048576f, _write.NextValue() / 1048576f);
             }
             catch (Exception ex) when (PerfCounters.IsExpectedFailure(ex))
             {
@@ -74,21 +63,16 @@ namespace SystemBarIndicator.Sensors
                             "disk activity will not be shown");
                 Available = false;
                 DisposeCounters();
-                return (0, 0, 0);
+                return (0, 0);
             }
         }
 
-        private IEnumerable<PerformanceCounter> AllCounters() =>
-            _readCounters.Concat(_writeCounters).Concat(_usageCounters);
-
         private void DisposeCounters()
         {
-            foreach (var c in AllCounters())
-                c.Dispose();
-
-            _readCounters.Clear();
-            _writeCounters.Clear();
-            _usageCounters.Clear();
+            _read?.Dispose();
+            _write?.Dispose();
+            _read = null;
+            _write = null;
         }
 
         public void Dispose()

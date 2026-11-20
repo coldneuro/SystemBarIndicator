@@ -7,6 +7,29 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- The disk section no longer disappears until the next restart when a drive is plugged in
+  or removed, or the disks are renumbered after a resume from sleep. It now reads the
+  combined counter for all disks, which survives those changes.
+- CPU temperature is now taken from the package sensor on Intel and the die sensor on AMD,
+  chosen by exact name. It could previously land on any core-like sensor — including a
+  "Distance to TjMax" reading, which is headroom below the throttling point rather than a
+  temperature.
+- One sensor failing (a GPU driver reset, for instance) no longer freezes the whole bar: the
+  other sections, the graphs and the tooltip keep updating, and the failure is logged once
+  instead of every second.
+- An update download that stalls is abandoned after 10 minutes instead of blocking every
+  later update check until a restart.
+- An update whose files cannot be copied into place no longer leaves the bar closed or
+  half-updated: the previous build is restored and the bar is restarted either way, with the
+  outcome written to `app.log`.
+
+### Changed
+
+- `app.log` records the stack trace of errors and is rolled over to `app.1.log` once it
+  passes 1 MB.
+
 ## [1.2.0] - 2026-09-12
 
 ### Added

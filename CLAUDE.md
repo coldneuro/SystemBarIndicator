@@ -15,10 +15,10 @@ SystemBarIndicator.sln
 ├── src/
 │   ├── SystemBarIndicator.Core/   # net10.0 — platform-independent core (no WinForms)
 │   │   ├── Models/                #   SensorData, DataPoint, DataHistory
-│   │   ├── Monitoring/            #   LoadLevel + thresholds, CpuLoad, VramLoad
+│   │   ├── Monitoring/            #   LoadLevel + thresholds, CpuLoad, VramLoad, CpuTemperaturePicker
 │   │   ├── Configuration/         #   AppSettings, SettingsStore, WindowPlacement, ColorCodec
 │   │   ├── Updates/               #   UpdateVersion, UpdateAssets, ReleaseChecksums
-│   │   └── Util/                  #   Formatting, Ema, AutoScale, SmoothingRates
+│   │   └── Util/                  #   Formatting, Ema, AutoScale, SmoothingRates, RepeatedFailureFilter
 │   └── SystemBarIndicator.App/    # net10.0-windows — WinForms UI + Windows sensors (WinExe)
 │       ├── Program.cs             #   MainForm: the taskbar bar, drawing, tray
 │       ├── GraphOverlay.cs        #   pop-up graphs
@@ -52,7 +52,11 @@ dotnet run --project src/SystemBarIndicator.App   # run the app
   no elevation; the arithmetic lives in `Core/Monitoring/CpuLoad` — the deltas are **unsigned**,
   so the idle-vs-total guards must come before the subtraction), and `DiskSensor` latches
   `Available = false`, which hides the section instead of drawing an idle-looking disk. Both
-  log once, not once per tick.
+  log once, not once per tick. `DiskSensor` reads only the `_Total` instance: per-disk
+  instance names are renumbered whenever a drive comes or goes (USB, resume from sleep), and
+  a counter bound to a vanished instance throws `Instance 'N' does not exist` — an
+  `InvalidOperationException`, i.e. an "expected" failure that would latch the section off
+  for the rest of the run although nothing is wrong with the counters.
 - **GPU sensor names.** LibreHardwareMonitor files several different numbers under similar
   names, so the pickers in `HardwareSensor` compare names **exactly** where it matters:
   `GPU Memory` (a `Load` sensor) is how full the VRAM is, `GPU Memory Controller` is the
@@ -61,11 +65,21 @@ dotnet run --project src/SystemBarIndicator.App   # run the app
   system RAM lent to the GPU rather than video memory. Nothing guarantees the order in which
   sensors are enumerated, so a loose match silently takes whichever happens to come last.
   Cards that report no ready-made VRAM percentage fall back to `VramLoad.Percent` (Core,
-  covered by tests) over that pair.
+  covered by tests) over that pair. LHM keeps a device's sensors in a `HashSet`, so "order"
+  really is unspecified.
+- **CPU temperature.** Chosen by `Core/Monitoring/CpuTemperaturePicker` (covered by tests)
+  from an exact-name priority list — `CPU Package` (Intel), `Core (Tctl/Tdie)`, `Core (Tdie)`,
+  `Core (Tctl)` (AMD Zen; Tctl carries a fan-control offset on some models), `Core Max`,
+  `CPU Cores` (older AMD) — and only then the hottest core-like reading. The old loose
+  `Contains("Core")` filter also matched `CPU Core #N Distance to TjMax`, which is headroom
+  below the throttling point, not a temperature; such sensors are always excluded.
 - **Polling.** `MainForm._timer` (1 s) refreshes a single `SensorData _current` snapshot
-  through the `Sensors` classes, then pushes a point into `DataHistory` (a 120-point ring
-  buffer). `HardwareSensor.Update()` must be called once per tick — without it LHM returns
-  empty values.
+  through the `Sensors` classes, then pushes a point into `DataHistory` (a 120-point
+  queue). `HardwareSensor.Update()` must be called once per tick — without it LHM returns
+  empty values. Each source is read through `MainForm.Sample` with its own `try`: one that
+  throws (a GPU driver reset) reads as zero for that tick instead of aborting RAM, disk,
+  network, the history and the repaint. Failures are logged when they start, change or
+  stop (`Core/Util/RepeatedFailureFilter`), never once per tick.
 - **Temperatures and PawnIO.** LHM 0.9.6 reads CPU sensors through the signed **PawnIO**
   kernel driver (instead of the vulnerable WinRing0, which Microsoft Defender flags).
   PawnIO is installed separately (pawnio.eu); without it CPU temperature is unavailable,
@@ -149,9 +163,14 @@ dotnet run --project src/SystemBarIndicator.App   # run the app
   `SHA256SUMS.txt` (a present-but-wrong checksum aborts; an absent one only logs), unpacks
   it (the exe sits one folder down — the release packs a versioned directory) and hands the
   swap to a generated `swap.ps1`, ASCII-only per the `.ps1` encoding rule: a running exe
-  cannot replace its own files. The script waits for the process to exit, copies over
-  `AppContext.BaseDirectory` with retries and restarts via `schtasks /run` (fallback: plain
-  `Start-Process`, unelevated). The release shape the updater relies on is documented in
+  cannot replace its own files. The download and checksum run under a 10-minute deadline:
+  `HttpClient.Timeout` ends at the response headers with `ResponseHeadersRead`, so a stalled
+  body would otherwise hang forever and keep `_updateBusy` set. The script waits for the
+  process to exit, backs up `AppContext.BaseDirectory` into `update\backup`, copies the new
+  build over it with retries (restoring the backup if that fails, so no half-old/half-new
+  mix is left), writes the outcome to `app.log`, and **always** restarts via
+  `schtasks /run` (fallback: plain `Start-Process`, unelevated) — a failed update must not
+  leave the user without the bar. The release shape the updater relies on is documented in
   `deploy/README.md#releasing`. Failed checks are classified by `Core/Updates/UpdateFailures`
   and de-duplicated on its stable `Key`: `EnsureSuccessStatusCode` raises the same
   `HttpRequestException` as a dead connection, so severity comes from `StatusCode` (null =
@@ -163,7 +182,8 @@ dotnet run --project src/SystemBarIndicator.App   # run the app
 - `nullable` is enabled everywhere; `TreatWarningsAsErrors=true` (see `Directory.Build.props`).
 - The build must stay warning-free.
 - English for code, comments, documentation and commit messages.
-- Application log: `%LOCALAPPDATA%\SystemBarIndicator\app.log`.
+- Application log: `%LOCALAPPDATA%\SystemBarIndicator\app.log`. Errors carry the stack
+  trace; past 1 MB the file is moved to `app.1.log` (replacing the previous one).
 - `ROADMAP.md` separates what is implemented from what is merely an idea — keep that
   distinction accurate when it changes.
 - User-visible changes get an entry under `## [Unreleased]` in `CHANGELOG.md`; internal

@@ -37,11 +37,13 @@ namespace SystemBarIndicator.Sensors
 
         public float? GetCpuTemperature()
         {
-            return GetFirstValue(_computer.Hardware
+            // The choice between "CPU Package", "Core (Tctl/Tdie)", per-core sensors and the
+            // "Distance to TjMax" look-alikes lives in Core, where it is tested.
+            return CpuTemperaturePicker.Pick(_computer.Hardware
                 .Where(h => h.HardwareType == HardwareType.Cpu)
                 .SelectMany(h => h.Sensors)
-                .Where(s => s.SensorType == SensorType.Temperature &&
-                            (s.Name.Contains("Core") || s.Name.Contains("Package") || s.Name.Contains("CPU"))));
+                .Where(s => s.SensorType == SensorType.Temperature)
+                .Select(s => (s.Name, s.Value)));
         }
 
         public float? GetGpuUsage()

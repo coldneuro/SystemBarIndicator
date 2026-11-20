@@ -131,7 +131,7 @@ the bar is moved back into the visible area.
 | Path | Contents |
 |------|----------|
 | `%LOCALAPPDATA%\SystemBarIndicator\settings.json` | Settings — safe to edit by hand; invalid values are silently replaced with valid ones |
-| `%LOCALAPPDATA%\SystemBarIndicator\app.log` | Application log |
+| `%LOCALAPPDATA%\SystemBarIndicator\app.log` | Application log; past 1 MB it is moved to `app.1.log` |
 
 Writes are atomic (temp file + move), and a corrupt or missing settings file falls back to
 defaults rather than failing to start.

@@ -177,6 +177,8 @@ namespace SystemBarIndicator
         private readonly Icon _appIcon;
 
         private readonly SensorData _current = new();
+        // Which polled sources are currently failing, so a broken one logs once, not per tick.
+        private readonly RepeatedFailureFilter _sampleFailures = new();
 
         // --- Settings ---
 private readonly string _settingsPath = SettingsStore.DefaultPath;
@@ -494,89 +496,139 @@ private readonly string _settingsPath = SettingsStore.DefaultPath;
 
         private void UpdateData()
         {
-            try
+            // Each source is sampled on its own: one that throws (a GPU driver reset, say)
+            // must not take RAM, disk, network, the history and the repaint down with it.
+            // A failed source reads as zero rather than freezing on its last value.
+            Sample("CpuSensor", () => _current.CpuUsage = _cpuSensor?.GetUsage() ?? 0f,
+                () => _current.CpuUsage = 0f);
+
+            if (_hardwareSensor != null)
+                Sample("HardwareSensor", ReadHardwareSensor, ClearHardwareReadings);
+
+            Sample("RamSensor", () =>
             {
-                _current.CpuUsage = _cpuSensor?.GetUsage() ?? 0f;
-
-                if (_hardwareSensor != null)
-                {
-                    _hardwareSensor.Update();
-                    _current.CpuTemperature = _hardwareSensor.GetCpuTemperature() ?? 0f;
-                    _current.GpuUsage = _hardwareSensor.GetGpuUsage() ?? 0f;
-                    _current.GpuTemperature = _hardwareSensor.GetGpuTemperature() ?? 0f;
-                    _current.GpuVramTemperature = _hardwareSensor.GetGpuVramTemperature() ?? 0f;
-                    _current.GpuVramUsage = _hardwareSensor.GetGpuVramUsage() ?? 0f;
-
-                    var gpuMem = _hardwareSensor.GetGpuMemory();
-                    if (gpuMem.HasValue)
-                    {
-                        _current.GpuMemoryUsed = gpuMem.Value.used ?? 0f;
-                        _current.GpuMemoryTotal = gpuMem.Value.total ?? 0f;
-                    }
-                }
-
-                _hasCpuTemp |= _current.CpuTemperature > 0f;
-                _hasGpu |= _current.GpuUsage > 0f || _current.GpuTemperature > 0f;
-                _hasGpuTemp |= _current.GpuTemperature > 0f;
-                _hasGpuVramTemp |= _current.GpuVramTemperature > 0f;
-                _hasGpuVramUsage |= _current.GpuVramUsage > 0f;
-
                 var ram = _ramSensor.GetInfo();
                 _current.RamUsage = ram.usagePercent;
                 _current.RamUsed = ram.usedBytes;
                 _current.RamTotal = ram.totalBytes;
+            }, () => _current.RamUsage = 0f);
 
-                if (_diskSensor != null)
+            if (_diskSensor != null)
+            {
+                Sample("DiskSensor", () =>
                 {
                     var disk = _diskSensor.GetInfo();
                     _current.DiskRead = disk.readMBps;
                     _current.DiskWrite = disk.writeMBps;
-                    _current.DiskUsagePercent = disk.usagePercent;
-                    // The sensor gives up permanently if its counters break mid-run.
-                    _diskAvailable &= _diskSensor.Available;
-                }
+                }, () => { _current.DiskRead = 0f; _current.DiskWrite = 0f; });
+                // The sensor gives up permanently if its counters break mid-run.
+                _diskAvailable &= _diskSensor.Available;
+            }
 
-                float dskR = _diskReadEma.Update(_current.DiskRead);
-                float dskW = _diskWriteEma.Update(_current.DiskWrite);
-                _diskScale.Update(Math.Max(dskR, dskW));
-
-                if (_networkSensor != null)
+            if (_networkSensor != null)
+            {
+                Sample("NetworkSensor", () =>
                 {
                     var net = _networkSensor.GetInfo();
                     _current.NetDown = net.downloadKBps;
                     _current.NetUp = net.uploadKBps;
-                }
+                }, () => { _current.NetDown = 0f; _current.NetUp = 0f; });
+            }
 
-                // Smooth the instantaneous rate and update the shared bar scale from the peak.
-                float netDl = _netDownEma.Update(_current.NetDown);
-                float netUl = _netUpEma.Update(_current.NetUp);
-                _netScale.Update(Math.Max(netDl, netUl));
+            Sample("UpdateData", PublishSnapshot, null);
+        }
 
-                _trayIcon.Text = string.Format("CPU: {0:F0}% | RAM: {1:F0}% | GPU: {2:F0}%",
-                    _current.CpuUsage, _current.RamUsage, _current.GpuUsage);
-
-                this.Invalidate();
-
-                _history.Add(new DataPoint
-                {
-                    Timestamp = DateTime.Now,
-                    CpuUsage = _current.CpuUsage,
-                    CpuTemperature = _current.CpuTemperature,
-                    GpuUsage = _current.GpuUsage,
-                    GpuTemperature = _current.GpuTemperature,
-                    GpuVramTemperature = _current.GpuVramTemperature,
-                    GpuVramUsage = _current.GpuVramUsage,
-                    RamUsage = _current.RamUsage,
-                    DiskRead = _current.DiskRead,
-                    DiskWrite = _current.DiskWrite,
-                    NetDown = _current.NetDown,
-                    NetUp = _current.NetUp
-                });
+        /// <summary>
+        /// Runs one source's read. Its failures are logged when they start, change or stop
+        /// (<see cref="RepeatedFailureFilter"/>), not on every tick of a sensor stuck in the
+        /// same error.
+        /// </summary>
+        private void Sample(string source, Action read, Action? onFailure)
+        {
+            try
+            {
+                read();
+                if (_sampleFailures.Recovered(source))
+                    Logger.Warn($"{source} is reading again");
             }
             catch (Exception ex)
             {
-                Logger.Error("UpdateData", ex);
+                if (_sampleFailures.ShouldReport(source, RepeatedFailureFilter.SignatureOf(ex)))
+                    Logger.Error(source, ex);
+                onFailure?.Invoke();
             }
+        }
+
+        private void ReadHardwareSensor()
+        {
+            var hw = _hardwareSensor!;
+            hw.Update();
+            _current.CpuTemperature = hw.GetCpuTemperature() ?? 0f;
+            _current.GpuUsage = hw.GetGpuUsage() ?? 0f;
+            _current.GpuTemperature = hw.GetGpuTemperature() ?? 0f;
+            _current.GpuVramTemperature = hw.GetGpuVramTemperature() ?? 0f;
+            _current.GpuVramUsage = hw.GetGpuVramUsage() ?? 0f;
+
+            var gpuMem = hw.GetGpuMemory();
+            if (gpuMem.HasValue)
+            {
+                _current.GpuMemoryUsed = gpuMem.Value.used ?? 0f;
+                _current.GpuMemoryTotal = gpuMem.Value.total ?? 0f;
+            }
+
+            _hasCpuTemp |= _current.CpuTemperature > 0f;
+            _hasGpu |= _current.GpuUsage > 0f || _current.GpuTemperature > 0f;
+            _hasGpuTemp |= _current.GpuTemperature > 0f;
+            _hasGpuVramTemp |= _current.GpuVramTemperature > 0f;
+            _hasGpuVramUsage |= _current.GpuVramUsage > 0f;
+        }
+
+        private void ClearHardwareReadings()
+        {
+            _current.CpuTemperature = 0f;
+            _current.GpuUsage = 0f;
+            _current.GpuTemperature = 0f;
+            _current.GpuVramTemperature = 0f;
+            _current.GpuVramUsage = 0f;
+        }
+
+        // Smoothing, the tray tooltip, the repaint and the history point — everything that
+        // consumes the snapshot once the sources have been read.
+        private void PublishSnapshot()
+        {
+            float dskR = _diskReadEma.Update(_current.DiskRead);
+            float dskW = _diskWriteEma.Update(_current.DiskWrite);
+            _diskScale.Update(Math.Max(dskR, dskW));
+
+            // Smooth the instantaneous rate and update the shared bar scale from the peak.
+            float netDl = _netDownEma.Update(_current.NetDown);
+            float netUl = _netUpEma.Update(_current.NetUp);
+            _netScale.Update(Math.Max(netDl, netUl));
+
+            // NotifyIcon pushes every assignment to the shell (Shell_NotifyIcon), so the
+            // tooltip is only touched when its text actually changes.
+            string tooltip = string.Format("CPU: {0:F0}% | RAM: {1:F0}% | GPU: {2:F0}%",
+                _current.CpuUsage, _current.RamUsage, _current.GpuUsage);
+            if (tooltip != _trayIcon.Text)
+                _trayIcon.Text = tooltip;
+
+            this.Invalidate();
+
+            _history.Add(new DataPoint
+            {
+                Timestamp = DateTime.Now,
+                CpuUsage = _current.CpuUsage,
+                CpuTemperature = _current.CpuTemperature,
+                GpuUsage = _current.GpuUsage,
+                GpuTemperature = _current.GpuTemperature,
+                GpuVramTemperature = _current.GpuVramTemperature,
+                GpuVramUsage = _current.GpuVramUsage,
+                RamUsage = _current.RamUsage,
+                DiskRead = _current.DiskRead,
+                DiskWrite = _current.DiskWrite,
+                NetDown = _current.NetDown,
+                NetUp = _current.NetUp
+            });
         }
 
         private void OpenGraphOverlay()
