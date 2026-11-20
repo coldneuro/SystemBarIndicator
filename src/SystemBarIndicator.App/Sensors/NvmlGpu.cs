@@ -43,6 +43,10 @@ namespace SystemBarIndicator.Sensors
 
         [DllImport("nvml.dll", ExactSpelling = true)]
         [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+        private static extern int nvmlDeviceGetCount_v2(out uint count);
+
+        [DllImport("nvml.dll", ExactSpelling = true)]
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
         private static extern int nvmlDeviceGetHandleByIndex_v2(uint index, out IntPtr device);
 
         [DllImport("nvml.dll", ExactSpelling = true)]
@@ -65,29 +69,71 @@ namespace SystemBarIndicator.Sensors
             _device = device;
         }
 
-        /// <summary>
-        /// The first NVIDIA GPU through NVML, or null when NVML is not there (no NVIDIA
-        /// driver, an old driver that keeps nvml.dll elsewhere) or reports no device — the
-        /// caller then stays on LibreHardwareMonitor for the GPU.
-        /// </summary>
-        public static NvmlGpu? TryOpen()
+        /// <summary>How an attempt to open NVML ended.</summary>
+        public enum OpenResult
         {
+            /// <summary>NVML is up and bound to the only NVIDIA GPU.</summary>
+            Opened,
+            /// <summary>
+            /// NVML answered but could not be used right now (the driver still loading at
+            /// logon, a driver being replaced): worth trying again later.
+            /// </summary>
+            Failed,
+            /// <summary>
+            /// NVML cannot serve this machine for the whole run: no nvml.dll in System32 (no
+            /// NVIDIA driver, or an old one that keeps it elsewhere), or not exactly one NVIDIA
+            /// GPU — with two cards nothing ties NVML's device index to the card LHM reports
+            /// the VRAM temperature for.
+            /// </summary>
+            Unavailable,
+        }
+
+        /// <summary>
+        /// Opens NVML on the machine's only NVIDIA GPU. <paramref name="gpu"/> is set only on
+        /// <see cref="OpenResult.Opened"/>; <paramref name="reason"/> says why otherwise.
+        /// </summary>
+        public static OpenResult TryOpen(out NvmlGpu? gpu, out string reason)
+        {
+            gpu = null;
             try
             {
-                if (nvmlInit_v2() != Success)
-                    return null;
-
-                if (nvmlDeviceGetHandleByIndex_v2(0, out var device) != Success)
+                int status = nvmlInit_v2();
+                if (status != Success)
                 {
-                    nvmlShutdown();
-                    return null;
+                    reason = $"nvmlInit failed (status {status})";
+                    return OpenResult.Failed;
                 }
 
-                return new NvmlGpu(device);
+                status = nvmlDeviceGetCount_v2(out uint count);
+                if (status != Success)
+                {
+                    nvmlShutdown();
+                    reason = $"NVML device count failed (status {status})";
+                    return OpenResult.Failed;
+                }
+                if (count != 1)
+                {
+                    nvmlShutdown();
+                    reason = $"NVML sees {count} NVIDIA GPUs; their order is not tied to LibreHardwareMonitor's";
+                    return OpenResult.Unavailable;
+                }
+
+                status = nvmlDeviceGetHandleByIndex_v2(0, out var device);
+                if (status != Success)
+                {
+                    nvmlShutdown();
+                    reason = $"NVML device handle failed (status {status})";
+                    return OpenResult.Failed;
+                }
+
+                gpu = new NvmlGpu(device);
+                reason = "";
+                return OpenResult.Opened;
             }
             catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException or BadImageFormatException)
             {
-                return null;
+                reason = $"NVML not available ({ex.GetType().Name})";
+                return OpenResult.Unavailable;
             }
         }
 

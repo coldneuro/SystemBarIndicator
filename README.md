@@ -145,6 +145,16 @@ Intel. Install PawnIO once and run the app elevated (option 2 above). GPU temper
 not need it and works without. If the app is not elevated, no temperature is available at
 all.
 
+**NVIDIA GPU load looks wrong (stuck at 0 %, or not matching other tools).** With a single
+NVIDIA card the load, temperature and memory come from NVML, the library `nvidia-smi` is
+built on, which ships with the driver and needs no administrator rights. `app.log` says
+which source is in use (`GPU readings: ...`). To compare under a steady load, run
+`nvidia-smi --query-gpu=name,utilization.gpu --format=csv -l 1`. With two or more NVIDIA
+cards, or without `nvml.dll` in `System32` (very old drivers), readings come from
+LibreHardwareMonitor instead. If NVML stops answering while the app runs — typically
+during a driver update — the bar switches to LibreHardwareMonitor and retries NVML every
+30 seconds.
+
 **The disk section is missing, and `app.log` mentions performance counters.** Windows
 performance counters are unavailable on the machine, so disk throughput cannot be read; the
 section is hidden rather than drawn as permanently idle, and the settings window marks it

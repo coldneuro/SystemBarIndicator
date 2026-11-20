@@ -66,7 +66,9 @@ dotnet run --project src/SystemBarIndicator.App   # run the app
   sensors are enumerated, so a loose match silently takes whichever happens to come last.
   Cards that report no ready-made VRAM percentage fall back to `VramLoad.Percent` (Core,
   covered by tests) over that pair. LHM keeps a device's sensors in a `HashSet`, so "order"
-  really is unspecified.
+  really is unspecified. Across devices the order is known and unhelpful: LHM lists AMD GPUs
+  **before** NVIDIA ones, so `GpuHardware()` sorts NVIDIA first — otherwise a Ryzen iGPU
+  would win over the discrete card.
 - **CPU temperature.** Chosen by `Core/Monitoring/CpuTemperaturePicker` (covered by tests)
   from an exact-name priority list — `CPU Package` (Intel), `Core (Tctl/Tdie)`, `Core (Tdie)`,
   `Core (Tctl)` (AMD Zen; Tctl carries a fan-control offset on some models), `Core Max`,
@@ -75,14 +77,20 @@ dotnet run --project src/SystemBarIndicator.App   # run the app
   below the throttling point, not a temperature; such sensors are always excluded.
 - **NVIDIA through NVML.** LHM's NVIDIA `Update()` measured ~85 ms wall / ~35 ms CPU per
   call: it refreshes clocks, fans, power topology, voltages and D3DKMT statistics through
-  NVAPI, and takes two `nvmlDeviceGetPcieThroughput` samples that block ~20 ms each. When LHM
-  finds an NVIDIA card, `HardwareSensor` reads load, core temperature and VRAM used/total
-  straight from NVML (`Sensors/NvmlGpu`, `nvml.dll` loaded from System32 only — the process
-  is elevated), which costs well under a millisecond, and skips every LHM GPU pass. The VRAM
-  temperature (`GPU Memory Junction`) exists only through NVAPI, so LHM's NVIDIA pass still
-  runs for it — at most every 5 s (`RefreshThrottle`, Core), only while that section is on,
-  and always on the first read so the availability latch learns the sensor exists. Without
-  NVML (no NVIDIA card, old driver) everything stays on LHM, every tick.
+  NVAPI, and takes two `nvmlDeviceGetPcieThroughput` samples that block ~20 ms each; on some
+  cards (an RTX 3090 report, PR #2) its `GPU Core` load also stays at 0 %. When LHM and NVML
+  both see **exactly one** NVIDIA card, `HardwareSensor` reads load, core temperature and
+  VRAM used/total straight from NVML (`Sensors/NvmlGpu`, `nvml.dll` loaded from System32
+  only — the process is elevated), which costs well under a millisecond, and skips every LHM
+  GPU pass. With two NVIDIA cards nothing ties NVML's device index to LHM's order, so the
+  readings could mix cards: LHM is used instead. The VRAM temperature (`GPU Memory Junction`)
+  exists only through NVAPI, so LHM's NVIDIA pass still runs for it — at most every 5 s
+  (`RefreshThrottle`, Core), only while that section is on, and always on the first read so
+  the availability latch learns the sensor exists. If NVML stops answering mid-run (a driver
+  update invalidates the session), the GPU falls back to LHM from that tick on and NVML is
+  re-opened at most every 30 s; `NvmlGpu.OpenResult` separates that retryable case from the
+  permanent ones (no DLL, not one NVIDIA card). The source in use is logged once (`INFO`).
+  Without NVML everything stays on LHM, every tick.
 - **Polling.** `Sensors/SensorPoller` owns all sensors and reads them on a dedicated
   background thread at the poll interval; the hardware pass (LHM's CPU read waits ~40 ms on
   per-core driver calls) used to hold the UI thread for ~100 ms a second, stalling clicks

@@ -36,6 +36,15 @@ namespace SystemBarIndicator
             Write($"WARN  {message}");
         }
 
+        /// <summary>
+        /// A fact worth having in a bug report but not a problem — which source a reading
+        /// comes from, say. Use sparingly: once per run or per state change, never per tick.
+        /// </summary>
+        public static void Info(string message)
+        {
+            Write($"INFO  {message}");
+        }
+
         private static void Write(string line)
         {
             string stamped = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {line}";

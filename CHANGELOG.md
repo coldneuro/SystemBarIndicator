@@ -9,6 +9,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- NVIDIA GPU load could stay at 0 % while the card was busy (reported on an RTX 3090). It
+  now comes from NVML, the same source `nvidia-smi` uses, whenever the machine has a
+  single NVIDIA card.
+- On a machine with integrated AMD graphics next to an NVIDIA card, the GPU section could
+  show the integrated GPU instead of the discrete one.
+- If NVML stops answering while the app runs (for instance during a driver update), the
+  GPU readings fall back to LibreHardwareMonitor and NVML is retried every 30 seconds,
+  instead of showing zeros until a restart. `app.log` records which source is in use.
+
 - The disk section no longer disappears until the next restart when a drive is plugged in
   or removed, or the disks are renumbered after a resume from sleep. It now reads the
   combined counter for all disks, which survives those changes.

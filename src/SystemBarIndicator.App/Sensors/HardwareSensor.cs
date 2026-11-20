@@ -1,22 +1,33 @@
 using LibreHardwareMonitor.Hardware;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using SystemBarIndicator.Monitoring;
+using SystemBarIndicator.Util;
 
 namespace SystemBarIndicator.Sensors
 {
     /// <summary>
     /// CPU and GPU readings. LibreHardwareMonitor supplies the CPU temperature and any
     /// non-NVIDIA GPU; an NVIDIA GPU is read through NVML instead (<see cref="NvmlGpu"/>),
-    /// because LHM's NVIDIA pass is by far the most expensive thing the bar does. The one
-    /// NVIDIA figure NVML cannot give — the VRAM ("GPU Memory Junction") temperature — still
-    /// comes from that LHM pass, which then runs only when the caller asks for it.
+    /// because LHM's NVIDIA pass is by far the most expensive thing the bar does — and on some
+    /// cards (an RTX 3090 report) its "GPU Core" load stays at 0 % while NVML reads it fine.
+    /// The one NVIDIA figure NVML cannot give — the VRAM ("GPU Memory Junction") temperature —
+    /// still comes from that LHM pass, which then runs only when the caller asks for it.
+    /// NVML is used only with exactly one NVIDIA GPU; if it stops answering mid-run (a driver
+    /// update), the GPU falls back to LHM and NVML is retried every 30 s.
     /// </summary>
     public class HardwareSensor : IDisposable
     {
+        private static readonly TimeSpan NvmlRetryPeriod = TimeSpan.FromSeconds(30);
+
         private readonly Computer _computer;
-        private readonly NvmlGpu? _nvml;
+        private NvmlGpu? _nvml;
+        // False once NVML is known to be unusable for the whole run (see NvmlGpu.OpenResult).
+        private bool _nvmlRetryable;
+        private readonly RefreshThrottle _nvmlRetry = new(NvmlRetryPeriod);
+        private readonly Stopwatch _clock = Stopwatch.StartNew();
 
         // NVML readings of the current tick.
         private float? _nvmlLoad;
@@ -37,10 +48,40 @@ namespace SystemBarIndicator.Sensors
             };
             _computer.Open();
 
-            // Only when LHM found an NVIDIA card: NVML then answers for the same GPU that
-            // LHM would have picked, since NVIDIA hardware is enumerated first.
-            if (_computer.Hardware.Any(h => h.HardwareType == HardwareType.GpuNvidia))
-                _nvml = NvmlGpu.TryOpen();
+            // NVML's device index is only known to be the card LHM reports when there is a
+            // single NVIDIA card; with two, the readings could come from different GPUs.
+            int nvidia = _computer.Hardware.Count(h => h.HardwareType == HardwareType.GpuNvidia);
+            if (nvidia == 1)
+                OpenNvml(initial: true);
+            else if (nvidia > 1)
+                Logger.Info($"GPU readings: LibreHardwareMonitor ({nvidia} NVIDIA GPUs, NVML not used)");
+        }
+
+        private void OpenNvml(bool initial)
+        {
+            switch (NvmlGpu.TryOpen(out var gpu, out string reason))
+            {
+                case NvmlGpu.OpenResult.Opened:
+                    _nvml = gpu;
+                    _nvmlRetryable = true;
+                    Logger.Info(initial
+                        ? "GPU readings: NVIDIA through NVML"
+                        : "NVML is answering again; GPU readings are back on NVML");
+                    break;
+
+                case NvmlGpu.OpenResult.Failed:
+                    // Retried quietly; only the first failure and the recovery are logged.
+                    _nvmlRetryable = true;
+                    _nvmlRetry.TryClaim(_clock.Elapsed);
+                    if (initial)
+                        Logger.Warn($"GPU readings: LibreHardwareMonitor for now — {reason}; retrying NVML every {NvmlRetryPeriod.TotalSeconds:F0} s");
+                    break;
+
+                default:
+                    _nvmlRetryable = false;
+                    Logger.Info($"GPU readings: LibreHardwareMonitor ({reason})");
+                    break;
+            }
         }
 
         /// <summary>
@@ -52,6 +93,9 @@ namespace SystemBarIndicator.Sensors
         /// </summary>
         public void Update(bool includeVramTemperature)
         {
+            if (_nvml == null && _nvmlRetryable && _nvmlRetry.TryClaim(_clock.Elapsed))
+                OpenNvml(initial: false);
+
             foreach (var hw in _computer.Hardware)
             {
                 if (_nvml != null && IsGpu(hw))
@@ -65,12 +109,26 @@ namespace SystemBarIndicator.Sensors
                 hw.Update();
             }
 
-            if (_nvml != null)
+            if (_nvml == null)
+                return;
+
+            _nvmlLoad = _nvml.Load;
+            if (!_nvmlLoad.HasValue)
             {
-                _nvmlLoad = _nvml.Load;
-                _nvmlTemperature = _nvml.Temperature;
-                _nvmlMemory = _nvml.Memory;
+                // NVML stopped answering (a driver update or reset invalidates the session):
+                // fall back to LHM until a retry succeeds, starting with this very tick.
+                Logger.Warn($"NVML stopped answering; GPU readings fall back to LibreHardwareMonitor, retrying NVML every {NvmlRetryPeriod.TotalSeconds:F0} s");
+                _nvml.Dispose();
+                _nvml = null;
+                _nvmlRetry.Reset();
+                _nvmlRetry.TryClaim(_clock.Elapsed);
+                foreach (var hw in GpuHardware())
+                    hw.Update();
+                return;
             }
+
+            _nvmlTemperature = _nvml.Temperature;
+            _nvmlMemory = _nvml.Memory;
         }
 
         public float? GetCpuTemperature()
@@ -170,7 +228,12 @@ namespace SystemBarIndicator.Sensors
             h.HardwareType == HardwareType.GpuAmd ||
             h.HardwareType == HardwareType.GpuIntel;
 
-        private IEnumerable<IHardware> GpuHardware() => _computer.Hardware.Where(IsGpu);
+        // NVIDIA first: LHM lists AMD GPUs before NVIDIA ones, so on a Ryzen with integrated
+        // graphics next to an NVIDIA card the first-with-a-value pickers below would read the
+        // iGPU. Every GPU metric uses this one order, so they never mix devices.
+        private IEnumerable<IHardware> GpuHardware() => _computer.Hardware
+            .Where(IsGpu)
+            .OrderByDescending(h => h.HardwareType == HardwareType.GpuNvidia);
 
         private IEnumerable<ISensor> GpuSensors() => GpuHardware().SelectMany(h => h.Sensors);
 
