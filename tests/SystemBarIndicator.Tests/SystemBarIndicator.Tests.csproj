@@ -19,7 +19,7 @@
          pieces and are gone; coverlet.MTP replaces the VSTest-only coverlet.collector.
          Coverage is opt-in: see "Build and test" in the README for the command. -->
     <PackageReference Include="coverlet.MTP" Version="10.1.0" />
-    <PackageReference Include="xunit.v3.mtp-v2" Version="4.0.2" />
+    <PackageReference Include="xunit.v3.mtp-v2" Version="4.0.3" />
   </ItemGroup>
 
   <ItemGroup>
