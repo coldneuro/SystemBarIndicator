@@ -25,7 +25,9 @@ they are the things most likely to be picked up, in roughly that order.
 - Unit tests for all of `Core`; CI builds and tests on `windows-latest` with warnings as errors
 - Prebuilt `win-x64` binaries on GitHub Releases, so running the app needs no .NET SDK
 - Auto-update from GitHub Releases: daily check, SHA-256 verification, file swap by an
-  external script and restart through the scheduled task
+  external script with rollback, and restart through the scheduled task
+- Sensor polling on a background thread, NVIDIA readings through NVML, per-source failure
+  isolation — about a third of the earlier CPU cost and no UI stalls
 
 ## Ideas
 

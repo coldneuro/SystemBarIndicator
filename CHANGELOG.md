@@ -7,6 +7,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-20
+
 ### Fixed
 
 - NVIDIA GPU load could stay at 0 % while the card was busy (reported on an RTX 3090). It
@@ -17,7 +19,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - If NVML stops answering while the app runs (for instance during a driver update), the
   GPU readings fall back to LibreHardwareMonitor and NVML is retried every 30 seconds,
   instead of showing zeros until a restart. `app.log` records which source is in use.
-
 - The disk section no longer disappears until the next restart when a drive is plugged in
   or removed, or the disks are renumbered after a resume from sleep. It now reads the
   combined counter for all disks, which survives those changes.
@@ -36,7 +37,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- About a third of the CPU time it used to take (measured on an RTX 3080: ~45 → ~14 ms per
+- Uses about a third of the CPU time it used to take (measured on an RTX 3080: ~45 → ~14 ms per
   second), and no more once-a-second stall of clicks, drags and the menu. Sensors are now
   read on a background thread; NVIDIA load, temperature and memory come straight from NVML
   instead of a full LibreHardwareMonitor pass over the card; the network interface list is
@@ -47,6 +48,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the expensive full pass.
 - `app.log` records the stack trace of errors and is rolled over to `app.1.log` once it
   passes 1 MB.
+- The documentation no longer claims that an unelevated run shows no temperatures at all:
+  only the CPU temperature needs administrator rights, and GPU temperatures show up without
+  them on NVIDIA cards.
 
 ## [1.2.0] - 2026-09-12
 
@@ -137,7 +141,8 @@ individual steps are in the commit log.
 - Unit tests covering all of `Core`; CI builds and tests on `windows-latest` with warnings
   as errors.
 
-[Unreleased]: https://github.com/coldneuro/SystemBarIndicator/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/coldneuro/SystemBarIndicator/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/coldneuro/SystemBarIndicator/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/coldneuro/SystemBarIndicator/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/coldneuro/SystemBarIndicator/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/coldneuro/SystemBarIndicator/compare/v1.0.0...v1.1.0

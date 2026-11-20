@@ -56,8 +56,8 @@ the screen.
 - [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download) — to run a prebuilt
   build; the [.NET 10 SDK](https://dotnet.microsoft.com/download) only if you build it
   yourself
-- Administrator rights — required to read hardware temperatures (the sensor driver is
-  loaded into the kernel)
+- Administrator rights — required for the CPU temperature (the sensor driver is loaded
+  into the kernel). GPU temperatures can be read without them; on NVIDIA cards they are
 - [PawnIO](https://pawnio.eu) — needed for **CPU** temperature, on AMD as well as Intel.
   Without it the CPU temperature reads 0 while GPU temperature still works; see
   [Troubleshooting](#troubleshooting)
@@ -71,8 +71,8 @@ Grab `SystemBarIndicator-win-x64.zip` from the
 anywhere and run `SystemBarIndicator.exe`. No SDK needed, only the .NET 10 desktop runtime.
 The build is unsigned, so SmartScreen will ask once before it starts.
 
-Launched this way the app is **not** elevated, so temperatures stay unavailable — for those,
-use option 2.
+Launched this way the app is **not** elevated, so the CPU temperature stays unavailable —
+for that, use option 2.
 
 ### Option 2 — install script (recommended)
 
@@ -98,7 +98,7 @@ cd SystemBarIndicator
 dotnet run --project src/SystemBarIndicator.App
 ```
 
-Started this way the app is **not** elevated, so temperatures will be unavailable —
+Started this way the app is **not** elevated, so the CPU temperature will be unavailable —
 everything else works.
 
 ## Usage
@@ -142,9 +142,8 @@ defaults rather than failing to start.
 
 **CPU temperature reads 0.** The CPU temperature comes from LibreHardwareMonitor, which
 reads it through the kernel-level [PawnIO](https://pawnio.eu) driver — on AMD as well as
-Intel. Install PawnIO once and run the app elevated (option 2 above). GPU temperature does
-not need it and works without. If the app is not elevated, no temperature is available at
-all.
+Intel. Install PawnIO once and run the app elevated (option 2 above). GPU temperatures need
+neither: on NVIDIA cards they show up even in an unelevated run.
 
 **NVIDIA GPU load looks wrong (stuck at 0 %, or not matching other tools).** With a single
 NVIDIA card the load, temperature and memory come from NVML, the library `nvidia-smi` is
@@ -182,8 +181,9 @@ This app reads hardware sensors, so it is worth being explicit about what it doe
   locally from the OS either way.
 - **Why administrator rights.** Temperatures come from
   [LibreHardwareMonitorLib](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor),
-  which reads CPU sensors through a kernel driver — that needs elevation. Load, RAM, disk
-  and network figures do not; without elevation the app simply omits temperatures.
+  which reads CPU sensors through a kernel driver — that needs elevation. Load, RAM, disk,
+  network and (on NVIDIA cards) GPU figures do not; without elevation the app simply omits
+  the CPU temperature.
 - **PawnIO instead of WinRing0.** LibreHardwareMonitor 0.9.5+ uses the signed
   [PawnIO](https://pawnio.eu) driver rather than WinRing0, which Microsoft Defender flags
   as vulnerable. PawnIO is installed separately and only once. Without it you lose CPU

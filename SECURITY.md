@@ -33,7 +33,7 @@ scrutiny:
   lives in the same release as the archive, so it catches a corrupted or truncated download,
   not a compromised release or maintainer account — the builds are not code-signed either.
 - **The manifest is `asInvoker`**, not `requireAdministrator`. The app never elevates
-  itself; running it normally just means temperatures are unavailable.
+  itself; running it normally just means the CPU temperature is unavailable.
 - **Elevation, when used, is explicit.** `deploy/Install.ps1` registers a Task Scheduler
   task with `RunLevel=Highest` and self-elevates only for that step — one UAC prompt during
   installation. Afterwards the desktop shortcut triggers that task, which is why launching
@@ -50,7 +50,7 @@ prompt, the next time the bar launches. The update staging folder and `swap.ps1`
 user-writable location for the same reason. Microsoft does not treat UAC as a security
 boundary, so this is a convenience trade-off rather than a vulnerability, but it is one you
 should choose knowingly. If it matters on your machine, skip the install script and run
-the app unelevated — you lose temperatures, nothing else.
+the app unelevated — you lose the CPU temperature, nothing else.
 
 ## Kernel driver
 
