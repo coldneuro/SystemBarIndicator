@@ -223,7 +223,7 @@ src/
     ├── Updates/                   #   GitHub Releases check and self-update
     └── Logging/Logger.cs          #   File logger
 
-tests/SystemBarIndicator.Tests/    # net10.0 — xUnit v3, covers Core
+tests/SystemBarIndicator.Tests/    # net10.0 — xUnit v3 on Microsoft Testing Platform, covers Core
 deploy/                            # Install/Uninstall scripts (see deploy/README.md)
 ```
 
@@ -235,10 +235,19 @@ detailed architecture notes — the non-obvious constraints behind the current d
 
 ```powershell
 dotnet build -c Release      # warnings are errors — see Directory.Build.props
-dotnet test  -c Release      # xUnit v3
+dotnet test  -c Release      # xUnit v3 on Microsoft Testing Platform (see global.json)
 ```
 
 CI runs the same two commands on `windows-latest` for every push and pull request.
+
+Code coverage is opt-in:
+
+```powershell
+dotnet test -c Release --coverlet --coverlet-output-format cobertura
+```
+
+The report lands in `TestResults\` under the current folder (ignored by git), or wherever
+`--results-directory` points.
 
 ## Contributing
 

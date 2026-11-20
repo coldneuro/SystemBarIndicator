@@ -10,16 +10,16 @@
 
   <ItemGroup>
     <!-- Versions are taken once they have been out for a couple of weeks, not on release
-         day. Test.Sdk 18 dropped its Newtonsoft.Json dependency; nothing here relied on it.
-         xunit.v3.mtp-off is xunit v3 without Microsoft Testing Platform: the plain xunit.v3
-         4.x package defaults to MTP v2, and on the .NET 10 SDK `dotnet test` then refuses
-         the VSTest path unless global.json switches the whole repository to MTP mode —
-         which would also mean replacing coverlet.collector. VSTest, through
-         xunit.runner.visualstudio, keeps `dotnet test` and CI exactly as they were. -->
-    <PackageReference Include="coverlet.collector" Version="10.1.0" />
-    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
-    <PackageReference Include="xunit.v3.mtp-off" Version="4.0.2" />
-    <PackageReference Include="xunit.runner.visualstudio" Version="4.0.1" />
+         day.
+         Tests run on Microsoft Testing Platform v2, not VSTest: global.json at the
+         repository root puts `dotnet test` into MTP mode, and the test exe itself is the
+         runner. The explicit xunit.v3.mtp-v2 package (rather than xunit.v3, whose default
+         happens to be MTP v2 today) keeps a future default change from switching the
+         platform silently. Microsoft.NET.Test.Sdk and xunit.runner.visualstudio are VSTest
+         pieces and are gone; coverlet.MTP replaces the VSTest-only coverlet.collector.
+         Coverage is opt-in: see "Build and test" in the README for the command. -->
+    <PackageReference Include="coverlet.MTP" Version="10.1.0" />
+    <PackageReference Include="xunit.v3.mtp-v2" Version="4.0.2" />
   </ItemGroup>
 
   <ItemGroup>

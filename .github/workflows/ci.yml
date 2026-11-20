@@ -38,5 +38,7 @@ jobs:
       - name: Build (Release)
         run: dotnet build --configuration Release --no-restore
 
+      # global.json puts dotnet test into Microsoft Testing Platform mode; a failing test
+      # makes it exit non-zero, and so does a run that finds no tests at all.
       - name: Test
         run: dotnet test --configuration Release --no-build --verbosity normal

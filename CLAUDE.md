@@ -28,14 +28,14 @@ SystemBarIndicator.sln
 │       ├── Updates/               #   UpdateChecker (GitHub API), UpdateInstaller (self-update)
 │       └── Logging/Logger.cs      #   file logger
 └── tests/
-    └── SystemBarIndicator.Tests/  # net10.0 — xUnit v3 (an Exe, run via VSTest), references Core only
+    └── SystemBarIndicator.Tests/  # net10.0 — xUnit v3 on Microsoft Testing Platform (an Exe), references Core only
 ```
 
 ## Commands
 
 ```bash
 dotnet build -c Release        # build (TreatWarningsAsErrors — fails on any warning)
-dotnet test  -c Release        # unit tests (xUnit v3 through VSTest; the built test exe also runs on its own)
+dotnet test  -c Release        # unit tests (xUnit v3 on MTP — global.json sets dotnet test's runner)
 dotnet run --project src/SystemBarIndicator.App   # run the app
 ```
 

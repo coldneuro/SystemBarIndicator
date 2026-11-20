@@ -18,7 +18,6 @@ updates:
       test-packages:
         patterns:
           - "coverlet.*"
-          - "Microsoft.NET.Test.Sdk"
           - "xunit*"
     # LibreHardwareMonitorLib stays in a PR of its own. Before merging one, publish with a
     # RID and start the packaged build (deploy/README.md#releasing, step 8): it is a
