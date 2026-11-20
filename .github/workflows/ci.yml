@@ -19,14 +19,15 @@ jobs:
     steps:
       # Actions are pinned by commit SHA rather than by tag: the owner of an action can move
       # a tag onto new code, a SHA cannot be moved. The trailing comment carries the
-      # human-readable version — bump the SHA and the comment together.
+      # human-readable version — bump the SHA and the comment together (Dependabot does both,
+      # see .github/dependabot.yml).
       # The v7/v6 majors run on node24: v4 targets node20, which the runners have deprecated
       # and force-substitute (producing a warning on every run).
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: '10.0.x'
 

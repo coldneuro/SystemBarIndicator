@@ -217,6 +217,10 @@ dotnet run --project src/SystemBarIndicator.App   # run the app
 - User-visible changes get an entry under `## [Unreleased]` in `CHANGELOG.md`; internal
   refactors and test-only changes do not. Releasing (version bump, tag, `win-x64` zip) is
   manual and documented in `deploy/README.md#releasing`.
+- **Dependency updates.** `.github/dependabot.yml` opens weekly PRs for NuGet and GitHub
+  Actions, only for releases at least 14 days old (`cooldown`); test packages come grouped
+  in one PR. Updating by hand, follow the same two-week rule. A `LibreHardwareMonitorLib`
+  bump needs the packaged-build check (`deploy/README.md#releasing`, step 8) before merging.
 - **Desktop deployment.** `LibreHardwareMonitorLib` 0.9.6 is a RID-split package (the real
   assemblies live in `runtimes/<rid>/lib/<tfm>/`). To get a clean flat layout of a single
   version, publish with a RID into a separate folder (outside OneDrive):
