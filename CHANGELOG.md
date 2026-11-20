@@ -27,6 +27,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- About a third of the CPU time it used to take (measured on an RTX 3080: ~45 → ~14 ms per
+  second), and no more once-a-second stall of clicks, drags and the menu. Sensors are now
+  read on a background thread; NVIDIA load, temperature and memory come straight from NVML
+  instead of a full LibreHardwareMonitor pass over the card; the network interface list is
+  cached instead of rebuilt every tick; the graph overlay repaints when new data arrives
+  instead of twice a second.
+- On NVIDIA cards the VRAM temperature refreshes every 5 seconds instead of every tick, and
+  is not read at all while its section is turned off: it is the one figure that still needs
+  the expensive full pass.
 - `app.log` records the stack trace of errors and is rolled over to `app.1.log` once it
   passes 1 MB.
 

@@ -33,7 +33,8 @@ the screen.
 - **RAM** — memory usage
 - **GPU** — load and temperature (NVIDIA / AMD / Intel)
 - **VRAM** — how full the video memory is, plus its temperature, where the card exposes
-  those sensors
+  those sensors (on NVIDIA cards the VRAM temperature refreshes every 5 seconds: reading it
+  costs more than everything else the bar does together)
 - **Disk** — read/write throughput as a smoothed dual bar
 - **Network** — download/upload throughput as a smoothed dual bar
 - **Graph overlay** — click the bar for ten history charts (CPU, CPU temp, RAM, GPU,
@@ -189,7 +190,7 @@ This app reads hardware sensors, so it is worth being explicit about what it doe
 | Runtime | .NET 10 (`net10.0-windows`) |
 | Drawing | GDI+ (`System.Drawing`) |
 | CPU / RAM / disk / network | `PerformanceCounter`, `GlobalMemoryStatusEx`, `NetworkInterface` |
-| Temperatures and GPU | [LibreHardwareMonitorLib](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) 0.9.6 |
+| Temperatures and GPU | [LibreHardwareMonitorLib](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) 0.9.6; NVIDIA load, temperature and memory through NVML (`nvml.dll`, part of the driver) |
 | CPU sensor access | [PawnIO](https://pawnio.eu) — signed kernel driver |
 
 ## Project layout
@@ -206,7 +207,7 @@ src/
     ├── GraphOverlay.cs            #   History graph overlay
     ├── SettingsForm.cs            #   Appearance settings, live preview
     ├── BarTheme.cs                #   Swappable GDI+ resources (theme, font scale)
-    ├── Sensors/                   #   Cpu, Ram, Disk, Network, Hardware (LHM)
+    ├── Sensors/                   #   Background poller; Cpu, Ram, Disk, Network, Hardware (LHM, NVML)
     └── Logging/Logger.cs          #   File logger
 
 tests/SystemBarIndicator.Tests/    # net10.0 — xUnit, covers Core

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Net.NetworkInformation;
 
@@ -11,17 +12,34 @@ namespace SystemBarIndicator.Sensors
     /// instance names of the "Network Interface" performance counters are derived from the
     /// adapter description and do not match <c>NetworkInterface.Name</c>, so matching by
     /// name frequently fails to find the counter.
+    /// <para>
+    /// The interface list is cached. Enumerating it (<c>GetAllNetworkInterfaces</c>) walks
+    /// every adapter's addresses and measured ~14 ms per tick on a machine with a few virtual
+    /// adapters, whereas reading one interface's counters is a single cheap call. The list is
+    /// rebuilt when Windows reports an address change (an adapter connecting, disconnecting
+    /// or appearing), when an interface stops answering, and every 30 s as a safety net.
+    /// </para>
     /// </summary>
-    public class NetworkSensor
+    public sealed class NetworkSensor : IDisposable
     {
+        private static readonly TimeSpan RefreshPeriod = TimeSpan.FromSeconds(30);
+
         private readonly Dictionary<string, long> _prevReceived = new();
         private readonly Dictionary<string, long> _prevSent = new();
-        private DateTime _lastCheck;
+        private readonly Stopwatch _clock = Stopwatch.StartNew();
+        private TimeSpan _lastCheck;
+        private TimeSpan _lastRefresh;
+        private NetworkInterface[] _interfaces = Array.Empty<NetworkInterface>();
+        // Set from a thread-pool thread by NetworkChange, consumed by the polling thread.
+        private volatile bool _refreshRequested = true;
 
         public NetworkSensor()
         {
-            _lastCheck = DateTime.Now;
-            foreach (var ni in GetActiveInterfaces())
+            NetworkChange.NetworkAddressChanged += OnNetworkChanged;
+            NetworkChange.NetworkAvailabilityChanged += OnNetworkChanged;
+
+            RefreshInterfaces();
+            foreach (var ni in _interfaces)
             {
                 try
                 {
@@ -34,15 +52,21 @@ namespace SystemBarIndicator.Sensors
                     // interface with no available IPv4 statistics — skip it
                 }
             }
+            _lastCheck = _clock.Elapsed;
         }
 
         public (float downloadKBps, float uploadKBps) GetInfo()
         {
-            var now = DateTime.Now;
+            // A monotonic clock: DateTime.Now jumps with clock corrections and DST, which
+            // turned into a spike (or a zero) in the computed rate.
+            var now = _clock.Elapsed;
             double elapsed = (now - _lastCheck).TotalSeconds;
             long totalDown = 0, totalUp = 0;
 
-            foreach (var ni in GetActiveInterfaces())
+            if (_refreshRequested || now - _lastRefresh >= RefreshPeriod)
+                RefreshInterfaces();
+
+            foreach (var ni in _interfaces)
             {
                 try
                 {
@@ -65,7 +89,9 @@ namespace SystemBarIndicator.Sensors
                 }
                 catch
                 {
-                    // skip the failing interface
+                    // The interface went away since the list was built: skip it this tick
+                    // and rebuild the list on the next one.
+                    _refreshRequested = true;
                 }
             }
 
@@ -75,12 +101,26 @@ namespace SystemBarIndicator.Sensors
             return ((float)(totalDown / 1024.0 / elapsed), (float)(totalUp / 1024.0 / elapsed));
         }
 
-        private static IEnumerable<NetworkInterface> GetActiveInterfaces()
+        private void RefreshInterfaces()
         {
-            return NetworkInterface.GetAllNetworkInterfaces()
+            // Cleared before enumerating, so a change that lands mid-enumeration still
+            // triggers another refresh.
+            _refreshRequested = false;
+            _lastRefresh = _clock.Elapsed;
+            _interfaces = NetworkInterface.GetAllNetworkInterfaces()
                 .Where(ni => ni.OperationalStatus == OperationalStatus.Up &&
                              ni.NetworkInterfaceType != NetworkInterfaceType.Loopback &&
-                             ni.NetworkInterfaceType != NetworkInterfaceType.Tunnel);
+                             ni.NetworkInterfaceType != NetworkInterfaceType.Tunnel)
+                .ToArray();
+        }
+
+        private void OnNetworkChanged(object? sender, EventArgs e) => _refreshRequested = true;
+
+        public void Dispose()
+        {
+            // Static events: without unsubscribing they would keep this object alive.
+            NetworkChange.NetworkAddressChanged -= OnNetworkChanged;
+            NetworkChange.NetworkAvailabilityChanged -= OnNetworkChanged;
         }
     }
 }

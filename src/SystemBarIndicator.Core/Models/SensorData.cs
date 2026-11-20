@@ -15,6 +15,8 @@ namespace SystemBarIndicator.Models
         public long RamTotal { get; set; }
         public float DiskRead { get; set; }
         public float DiskWrite { get; set; }
+        /// <summary>False once the disk counters have proved unusable; see DiskSensor.</summary>
+        public bool DiskAvailable { get; set; }
         public float NetDown { get; set; }
         public float NetUp { get; set; }
     }

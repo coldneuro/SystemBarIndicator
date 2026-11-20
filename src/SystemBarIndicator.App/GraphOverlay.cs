@@ -21,7 +21,6 @@ namespace SystemBarIndicator
         private readonly DataHistory _history;
         private readonly Func<SensorData> _getCurrentData;
         private readonly MainForm _parentForm;
-        private readonly Timer _updateTimer;
 
         private BarTheme _theme;
         private AppSettings _settings;
@@ -86,12 +85,20 @@ namespace SystemBarIndicator
 
             UpdateSize();
 
-            // One timer: recompute size/position plus repaint. The old 100 ms positioning
-            // timer is gone — the window follows the bar through the parent's
-            // LocationChanged event, and this one refreshes every 500 ms.
-            _updateTimer = new Timer { Interval = 500 };
-            _updateTimer.Tick += (s, e) => { PositionAboveParent(); this.Invalidate(); };
-            _updateTimer.Start();
+            // No timer of its own: the window follows the bar through the parent's
+            // LocationChanged event, and the bar calls RefreshData with every new snapshot.
+            // A 500 ms timer used to repaint all the charts twice per sample at the default
+            // 1 s poll, and ten times per sample at 5 s, with nothing new to show.
+        }
+
+        /// <summary>
+        /// A new snapshot has arrived: re-fit the window (charts that only appear once their
+        /// sensor reports a value can change its height) and repaint.
+        /// </summary>
+        public void RefreshData()
+        {
+            PositionAboveParent();
+            this.Invalidate();
         }
 
         /// <summary>The overlay is slightly more solid than the bar, but tracks its opacity.</summary>
@@ -311,18 +318,10 @@ namespace SystemBarIndicator
 
         private string FormatTemp(float celsius) => Formatting.FormatTemperature(celsius, _settings.UseFahrenheit);
 
-        protected override void OnFormClosing(FormClosingEventArgs e)
-        {
-            _updateTimer.Stop();
-            base.OnFormClosing(e);
-        }
-
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
             // Drawing resources are released only after the window is destroyed: a WM_PAINT
             // can still arrive between FormClosing and FormClosed.
-            _updateTimer.Dispose();
-
             foreach (var c in _charts)
             {
                 c.LineBrush.Dispose();

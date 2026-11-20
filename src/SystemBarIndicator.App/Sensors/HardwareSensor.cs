@@ -6,9 +6,22 @@ using SystemBarIndicator.Monitoring;
 
 namespace SystemBarIndicator.Sensors
 {
+    /// <summary>
+    /// CPU and GPU readings. LibreHardwareMonitor supplies the CPU temperature and any
+    /// non-NVIDIA GPU; an NVIDIA GPU is read through NVML instead (<see cref="NvmlGpu"/>),
+    /// because LHM's NVIDIA pass is by far the most expensive thing the bar does. The one
+    /// NVIDIA figure NVML cannot give — the VRAM ("GPU Memory Junction") temperature — still
+    /// comes from that LHM pass, which then runs only when the caller asks for it.
+    /// </summary>
     public class HardwareSensor : IDisposable
     {
         private readonly Computer _computer;
+        private readonly NvmlGpu? _nvml;
+
+        // NVML readings of the current tick.
+        private float? _nvmlLoad;
+        private float? _nvmlTemperature;
+        private (float? used, float? total) _nvmlMemory;
 
         public HardwareSensor()
         {
@@ -23,16 +36,41 @@ namespace SystemBarIndicator.Sensors
                 IsStorageEnabled = false
             };
             _computer.Open();
+
+            // Only when LHM found an NVIDIA card: NVML then answers for the same GPU that
+            // LHM would have picked, since NVIDIA hardware is enumerated first.
+            if (_computer.Hardware.Any(h => h.HardwareType == HardwareType.GpuNvidia))
+                _nvml = NvmlGpu.TryOpen();
         }
 
         /// <summary>
-        /// Refreshes every device's readings once. Must be called once per tick before
-        /// reading the getters — LibreHardwareMonitor does not refresh values on its own.
+        /// Refreshes the readings once. Must be called once per tick before reading the
+        /// getters — LibreHardwareMonitor does not refresh values on its own.
+        /// <paramref name="includeVramTemperature"/> adds LHM's full NVIDIA pass, the only
+        /// source of the VRAM temperature on NVIDIA cards; between such passes that reading
+        /// keeps its last value. Without NVML every device is refreshed on every call.
         /// </summary>
-        public void Update()
+        public void Update(bool includeVramTemperature)
         {
             foreach (var hw in _computer.Hardware)
+            {
+                if (_nvml != null && IsGpu(hw))
+                {
+                    // NVML answers for the GPU; other GPUs (an iGPU next to the NVIDIA card)
+                    // are not shown in that case and need no refresh at all.
+                    if (hw.HardwareType == HardwareType.GpuNvidia && includeVramTemperature)
+                        hw.Update();
+                    continue;
+                }
                 hw.Update();
+            }
+
+            if (_nvml != null)
+            {
+                _nvmlLoad = _nvml.Load;
+                _nvmlTemperature = _nvml.Temperature;
+                _nvmlMemory = _nvml.Memory;
+            }
         }
 
         public float? GetCpuTemperature()
@@ -48,6 +86,9 @@ namespace SystemBarIndicator.Sensors
 
         public float? GetGpuUsage()
         {
+            if (_nvml != null)
+                return _nvmlLoad;
+
             var loads = GpuSensors().Where(s => s.SensorType == SensorType.Load);
 
             // "GPU Core" is the overall load. The looser fallback stays for cards that name it
@@ -60,6 +101,9 @@ namespace SystemBarIndicator.Sensors
 
         public float? GetGpuTemperature()
         {
+            if (_nvml != null)
+                return _nvmlTemperature;
+
             var temps = GpuSensors().Where(s => s.SensorType == SensorType.Temperature);
 
             // Prefer the core sensor and never fall back to a memory one — on cards that
@@ -83,6 +127,9 @@ namespace SystemBarIndicator.Sensors
         /// </summary>
         public float? GetGpuVramUsage()
         {
+            if (_nvml != null)
+                return VramLoad.Percent(_nvmlMemory.used, _nvmlMemory.total);
+
             float? direct = GetFirstValue(GpuSensors()
                 .Where(s => s.SensorType == SensorType.Load && s.Name == "GPU Memory"));
             if (direct.HasValue)
@@ -101,6 +148,9 @@ namespace SystemBarIndicator.Sensors
         /// </summary>
         public (float? used, float? total)? GetGpuMemory()
         {
+            if (_nvml != null)
+                return _nvmlMemory.used.HasValue || _nvmlMemory.total.HasValue ? _nvmlMemory : null;
+
             foreach (var gpu in GpuHardware())
             {
                 var data = gpu.Sensors.Where(s => s.SensorType == SensorType.SmallData).ToList();
@@ -115,10 +165,12 @@ namespace SystemBarIndicator.Sensors
             return null;
         }
 
-        private IEnumerable<IHardware> GpuHardware() => _computer.Hardware
-            .Where(h => h.HardwareType == HardwareType.GpuNvidia ||
-                        h.HardwareType == HardwareType.GpuAmd ||
-                        h.HardwareType == HardwareType.GpuIntel);
+        private static bool IsGpu(IHardware h) =>
+            h.HardwareType == HardwareType.GpuNvidia ||
+            h.HardwareType == HardwareType.GpuAmd ||
+            h.HardwareType == HardwareType.GpuIntel;
+
+        private IEnumerable<IHardware> GpuHardware() => _computer.Hardware.Where(IsGpu);
 
         private IEnumerable<ISensor> GpuSensors() => GpuHardware().SelectMany(h => h.Sensors);
 
@@ -134,6 +186,7 @@ namespace SystemBarIndicator.Sensors
 
         public void Dispose()
         {
+            _nvml?.Dispose();
             _computer.Close();
         }
     }

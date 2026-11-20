@@ -154,14 +154,13 @@ namespace SystemBarIndicator
 
 
         // --- Sensors ---
-        private CpuSensor? _cpuSensor;
-        private readonly RamSensor _ramSensor = new();
-        private DiskSensor? _diskSensor;
-        private NetworkSensor? _networkSensor;
-        private HardwareSensor? _hardwareSensor;
+        // Owns every sensor and reads them on its own thread; snapshots arrive through
+        // OnReadingFromPoller. See SensorPoller for the threading contract.
+        private readonly SensorPoller _poller;
+        // Set once closing starts: snapshots still queued for the UI thread are dropped.
+        private volatile bool _closing;
 
         // --- State and UI ---
-        private readonly Timer _timer;
         private readonly Timer _topmostTimer;
         private readonly Timer _saveTimer;
         private readonly Timer _updateCheckTimer;
@@ -176,9 +175,10 @@ namespace SystemBarIndicator
         private SettingsForm? _settingsForm;
         private readonly Icon _appIcon;
 
-        private readonly SensorData _current = new();
-        // Which polled sources are currently failing, so a broken one logs once, not per tick.
-        private readonly RepeatedFailureFilter _sampleFailures = new();
+        // The latest snapshot from the poller. Replaced, never mutated, on the UI thread.
+        private SensorData _current = new();
+        // Failures while applying a snapshot to the UI, so a repeating one logs once.
+        private readonly RepeatedFailureFilter _applyFailures = new();
 
         // --- Settings ---
 private readonly string _settingsPath = SettingsStore.DefaultPath;
@@ -198,7 +198,8 @@ private readonly string _settingsPath = SettingsStore.DefaultPath;
         private bool _hasGpuVramTemp;
         private bool _hasGpuVramUsage;
         // Disk works the other way round: it is available until the counters prove otherwise
-        // (they can be disabled machine-wide), and it never comes back within a run.
+        // (they can be disabled machine-wide), and it never comes back within a run — the
+        // sensor guarantees the one-way part, the snapshot carries its state.
         private bool _diskAvailable;
 
         private int _pendingBarWidth; // 0 means no width adjustment is scheduled
@@ -225,13 +226,13 @@ private readonly string _settingsPath = SettingsStore.DefaultPath;
 
         public MainForm()
         {
-            InitSensors();
-
             _history = new DataHistory(120);
 
             _settings = SettingsStore.Load(_settingsPath, out var settingsError);
             if (settingsError != null)
                 Logger.Error("SettingsStore.Load", settingsError);
+
+            _poller = new SensorPoller(_settings.UpdateIntervalMs, _settings.ShowGpuVramTemp);
             _positionUserDefined = _settings.BarRight.HasValue && _settings.BarTop.HasValue;
             _theme = BarTheme.Create(_settings);
 
@@ -269,10 +270,7 @@ private readonly string _settingsPath = SettingsStore.DefaultPath;
             _menu.Items.Add("Exit", null, (s, e) => { _trayIcon.Visible = false; Application.Exit(); });
             _trayIcon.ContextMenuStrip = _menu;
 
-            _timer = new Timer { Interval = _settings.UpdateIntervalMs };
-            _timer.Tick += TimerTick;
             ApplySmoothingRates(_settings.UpdateIntervalMs);
-            _timer.Start();
 
             // Staying on top is handled by WM_WINDOWPOSCHANGING; this timer is only a rare
             // safety net (it used to run at an aggressive 200 ms interval).
@@ -302,32 +300,6 @@ private readonly string _settingsPath = SettingsStore.DefaultPath;
             }
         }
 
-        private void InitSensors()
-        {
-            try { _cpuSensor = new CpuSensor(); }
-            catch (Exception ex) { Logger.Error("CpuSensor.init", ex); }
-
-            try { _diskSensor = new DiskSensor(); }
-            catch (Exception ex)
-            {
-                // Expected where the performance-counter service is disabled: the section is
-                // hidden rather than drawn as permanently idle.
-                if (PerfCounters.IsExpectedFailure(ex))
-                    Logger.Warn($"disk performance counters unavailable ({PerfCounters.Describe(ex)}); " +
-                                "disk activity will not be shown");
-                else
-                    Logger.Error("DiskSensor.init", ex);
-            }
-
-            _diskAvailable = _diskSensor?.Available == true;
-
-            try { _networkSensor = new NetworkSensor(); }
-            catch (Exception ex) { Logger.Error("NetworkSensor.init", ex); }
-
-            try { _hardwareSensor = new HardwareSensor(); }
-            catch (Exception ex) { Logger.Error("HardwareSensor.init", ex); }
-        }
-
         // The icon is embedded in the assembly as a resource (see EmbeddedResource in the
         // .csproj). It is a multi-size .ico: Windows picks the right frame itself (16 px for
         // the tray, larger ones for the window and taskbar).
@@ -344,8 +316,11 @@ private readonly string _settingsPath = SettingsStore.DefaultPath;
             PositionOnTaskbar();
             TryRestoreSavedPosition();
             _positionTrackingReady = true;
-            UpdateData();
+            // The first read happens here, synchronously, so the first frame already shows
+            // real values and the right sections; from then on the poller's thread reads.
+            ApplyReading(_poller.ReadOnce());
             MaybeShowPerfCounterNotice();
+            _poller.Start(OnReadingFromPoller);
         }
 
         /// <summary>
@@ -489,107 +464,55 @@ private readonly string _settingsPath = SettingsStore.DefaultPath;
             SetWindowPos(this.Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         }
 
-        private void TimerTick(object? sender, EventArgs e)
-        {
-            UpdateData();
-        }
-
-        private void UpdateData()
-        {
-            // Each source is sampled on its own: one that throws (a GPU driver reset, say)
-            // must not take RAM, disk, network, the history and the repaint down with it.
-            // A failed source reads as zero rather than freezing on its last value.
-            Sample("CpuSensor", () => _current.CpuUsage = _cpuSensor?.GetUsage() ?? 0f,
-                () => _current.CpuUsage = 0f);
-
-            if (_hardwareSensor != null)
-                Sample("HardwareSensor", ReadHardwareSensor, ClearHardwareReadings);
-
-            Sample("RamSensor", () =>
-            {
-                var ram = _ramSensor.GetInfo();
-                _current.RamUsage = ram.usagePercent;
-                _current.RamUsed = ram.usedBytes;
-                _current.RamTotal = ram.totalBytes;
-            }, () => _current.RamUsage = 0f);
-
-            if (_diskSensor != null)
-            {
-                Sample("DiskSensor", () =>
-                {
-                    var disk = _diskSensor.GetInfo();
-                    _current.DiskRead = disk.readMBps;
-                    _current.DiskWrite = disk.writeMBps;
-                }, () => { _current.DiskRead = 0f; _current.DiskWrite = 0f; });
-                // The sensor gives up permanently if its counters break mid-run.
-                _diskAvailable &= _diskSensor.Available;
-            }
-
-            if (_networkSensor != null)
-            {
-                Sample("NetworkSensor", () =>
-                {
-                    var net = _networkSensor.GetInfo();
-                    _current.NetDown = net.downloadKBps;
-                    _current.NetUp = net.uploadKBps;
-                }, () => { _current.NetDown = 0f; _current.NetUp = 0f; });
-            }
-
-            Sample("UpdateData", PublishSnapshot, null);
-        }
-
         /// <summary>
-        /// Runs one source's read. Its failures are logged when they start, change or stop
-        /// (<see cref="RepeatedFailureFilter"/>), not on every tick of a sensor stuck in the
-        /// same error.
+        /// Called on the poller's thread with each finished snapshot: hands it over to the UI
+        /// thread. A snapshot that arrives while the window is going away is dropped.
         /// </summary>
-        private void Sample(string source, Action read, Action? onFailure)
+        private void OnReadingFromPoller(SensorData reading)
+        {
+            if (_closing || !IsHandleCreated)
+                return;
+            try
+            {
+                BeginInvoke(new Action(() =>
+                {
+                    if (!_closing)
+                        ApplyReading(reading);
+                }));
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)
+            {
+                // The handle was destroyed between the check and the call: shutting down.
+            }
+        }
+
+        /// <summary>Takes a snapshot into the UI: latches, smoothing, tooltip, history, repaint.</summary>
+        private void ApplyReading(SensorData reading)
         {
             try
             {
-                read();
-                if (_sampleFailures.Recovered(source))
-                    Logger.Warn($"{source} is reading again");
+                _current = reading;
+
+                _hasCpuTemp |= reading.CpuTemperature > 0f;
+                _hasGpu |= reading.GpuUsage > 0f || reading.GpuTemperature > 0f;
+                _hasGpuTemp |= reading.GpuTemperature > 0f;
+                _hasGpuVramTemp |= reading.GpuVramTemperature > 0f;
+                _hasGpuVramUsage |= reading.GpuVramUsage > 0f;
+                _diskAvailable = reading.DiskAvailable;
+
+                PublishSnapshot();
+
+                if (_graphOverlay != null && !_graphOverlay.IsDisposed)
+                    _graphOverlay.RefreshData();
+
+                if (_applyFailures.Recovered("ApplyReading"))
+                    Logger.Warn("ApplyReading is working again");
             }
             catch (Exception ex)
             {
-                if (_sampleFailures.ShouldReport(source, RepeatedFailureFilter.SignatureOf(ex)))
-                    Logger.Error(source, ex);
-                onFailure?.Invoke();
+                if (_applyFailures.ShouldReport("ApplyReading", RepeatedFailureFilter.SignatureOf(ex)))
+                    Logger.Error("ApplyReading", ex);
             }
-        }
-
-        private void ReadHardwareSensor()
-        {
-            var hw = _hardwareSensor!;
-            hw.Update();
-            _current.CpuTemperature = hw.GetCpuTemperature() ?? 0f;
-            _current.GpuUsage = hw.GetGpuUsage() ?? 0f;
-            _current.GpuTemperature = hw.GetGpuTemperature() ?? 0f;
-            _current.GpuVramTemperature = hw.GetGpuVramTemperature() ?? 0f;
-            _current.GpuVramUsage = hw.GetGpuVramUsage() ?? 0f;
-
-            var gpuMem = hw.GetGpuMemory();
-            if (gpuMem.HasValue)
-            {
-                _current.GpuMemoryUsed = gpuMem.Value.used ?? 0f;
-                _current.GpuMemoryTotal = gpuMem.Value.total ?? 0f;
-            }
-
-            _hasCpuTemp |= _current.CpuTemperature > 0f;
-            _hasGpu |= _current.GpuUsage > 0f || _current.GpuTemperature > 0f;
-            _hasGpuTemp |= _current.GpuTemperature > 0f;
-            _hasGpuVramTemp |= _current.GpuVramTemperature > 0f;
-            _hasGpuVramUsage |= _current.GpuVramUsage > 0f;
-        }
-
-        private void ClearHardwareReadings()
-        {
-            _current.CpuTemperature = 0f;
-            _current.GpuUsage = 0f;
-            _current.GpuTemperature = 0f;
-            _current.GpuVramTemperature = 0f;
-            _current.GpuVramUsage = 0f;
         }
 
         // Smoothing, the tray tooltip, the repaint and the history point — everything that
@@ -819,9 +742,10 @@ private readonly string _settingsPath = SettingsStore.DefaultPath;
 
             if (previous.UpdateIntervalMs != next.UpdateIntervalMs)
             {
-                _timer.Interval = next.UpdateIntervalMs;
+                _poller.IntervalMs = next.UpdateIntervalMs;
                 ApplySmoothingRates(next.UpdateIntervalMs);
             }
+            _poller.WantVramTemperature = next.ShowGpuVramTemp;
 
             this.Invalidate();
             MarkSettingsDirty();
@@ -1271,7 +1195,7 @@ private readonly string _settingsPath = SettingsStore.DefaultPath;
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            _timer.Stop();
+            _closing = true;
             _topmostTimer.Stop();
             _saveTimer.Stop();
             _updateCheckTimer.Stop();
@@ -1283,15 +1207,13 @@ private readonly string _settingsPath = SettingsStore.DefaultPath;
             if (_graphOverlay != null && !_graphOverlay.IsDisposed)
                 _graphOverlay.Close();
 
-            _cpuSensor?.Dispose();
-            _diskSensor?.Dispose();
-            _hardwareSensor?.Dispose();
+            // Joins the polling thread before releasing the sensors it uses.
+            _poller.Dispose();
 
             _trayIcon.Visible = false;
             _trayIcon.Dispose();
             _appIcon.Dispose();
 
-            _timer.Dispose();
             _topmostTimer.Dispose();
             _saveTimer.Dispose();
             _updateCheckTimer.Dispose();

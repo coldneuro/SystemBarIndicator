@@ -18,13 +18,13 @@ SystemBarIndicator.sln
 │   │   ├── Monitoring/            #   LoadLevel + thresholds, CpuLoad, VramLoad, CpuTemperaturePicker
 │   │   ├── Configuration/         #   AppSettings, SettingsStore, WindowPlacement, ColorCodec
 │   │   ├── Updates/               #   UpdateVersion, UpdateAssets, ReleaseChecksums
-│   │   └── Util/                  #   Formatting, Ema, AutoScale, SmoothingRates, RepeatedFailureFilter
+│   │   └── Util/                  #   Formatting, Ema, AutoScale, SmoothingRates, RepeatedFailureFilter, RefreshThrottle
 │   └── SystemBarIndicator.App/    # net10.0-windows — WinForms UI + Windows sensors (WinExe)
 │       ├── Program.cs             #   MainForm: the taskbar bar, drawing, tray
 │       ├── GraphOverlay.cs        #   pop-up graphs
 │       ├── SettingsForm.cs        #   appearance settings window
 │       ├── BarTheme.cs            #   swappable GDI+ resources (theme + font scale)
-│       ├── Sensors/               #   Cpu/Ram/Disk/Network/Hardware (PerfCounter, P/Invoke, LHM)
+│       ├── Sensors/               #   SensorPoller + Cpu/Ram/Disk/Network/Hardware/NvmlGpu (PerfCounter, P/Invoke, LHM, NVML)
 │       ├── Updates/               #   UpdateChecker (GitHub API), UpdateInstaller (self-update)
 │       └── Logging/Logger.cs      #   file logger
 └── tests/
@@ -73,13 +73,33 @@ dotnet run --project src/SystemBarIndicator.App   # run the app
   `CPU Cores` (older AMD) — and only then the hottest core-like reading. The old loose
   `Contains("Core")` filter also matched `CPU Core #N Distance to TjMax`, which is headroom
   below the throttling point, not a temperature; such sensors are always excluded.
-- **Polling.** `MainForm._timer` (1 s) refreshes a single `SensorData _current` snapshot
-  through the `Sensors` classes, then pushes a point into `DataHistory` (a 120-point
-  queue). `HardwareSensor.Update()` must be called once per tick — without it LHM returns
-  empty values. Each source is read through `MainForm.Sample` with its own `try`: one that
-  throws (a GPU driver reset) reads as zero for that tick instead of aborting RAM, disk,
-  network, the history and the repaint. Failures are logged when they start, change or
-  stop (`Core/Util/RepeatedFailureFilter`), never once per tick.
+- **NVIDIA through NVML.** LHM's NVIDIA `Update()` measured ~85 ms wall / ~35 ms CPU per
+  call: it refreshes clocks, fans, power topology, voltages and D3DKMT statistics through
+  NVAPI, and takes two `nvmlDeviceGetPcieThroughput` samples that block ~20 ms each. When LHM
+  finds an NVIDIA card, `HardwareSensor` reads load, core temperature and VRAM used/total
+  straight from NVML (`Sensors/NvmlGpu`, `nvml.dll` loaded from System32 only — the process
+  is elevated), which costs well under a millisecond, and skips every LHM GPU pass. The VRAM
+  temperature (`GPU Memory Junction`) exists only through NVAPI, so LHM's NVIDIA pass still
+  runs for it — at most every 5 s (`RefreshThrottle`, Core), only while that section is on,
+  and always on the first read so the availability latch learns the sensor exists. Without
+  NVML (no NVIDIA card, old driver) everything stays on LHM, every tick.
+- **Polling.** `Sensors/SensorPoller` owns all sensors and reads them on a dedicated
+  background thread at the poll interval; the hardware pass (LHM's CPU read waits ~40 ms on
+  per-core driver calls) used to hold the UI thread for ~100 ms a second, stalling clicks
+  and drags. Threading contract: sensors are built on the UI thread, read once synchronously
+  there in `OnLoad` (so the first frame has data), then only by the poller thread until
+  `Dispose` joins it. Each tick produces a **new** `SensorData`, never mutated afterwards;
+  `MainForm.OnReadingFromPoller` marshals it with `BeginInvoke`, and `ApplyReading` does the
+  latches, smoothing, tooltip, history (`DataHistory`, a 120-point queue) and repaint on the
+  UI thread. `HardwareSensor.Update()` must be called once per tick — without it LHM returns
+  empty values. Each source is read through `SensorPoller.Sample` with its own `try`: one
+  that throws (a GPU driver reset) reads as zero for that tick instead of aborting the rest.
+  Failures are logged when they start, change or stop (`Core/Util/RepeatedFailureFilter`),
+  never once per tick. The graph overlay has no timer of its own: the bar calls
+  `GraphOverlay.RefreshData` with each snapshot.
+- **Network.** `NetworkSensor` caches the interface list: `GetAllNetworkInterfaces` cost
+  ~14 ms per tick, the per-interface counters are cheap. The list is rebuilt on
+  `NetworkChange` events, when an interface stops answering, and every 30 s.
 - **Temperatures and PawnIO.** LHM 0.9.6 reads CPU sensors through the signed **PawnIO**
   kernel driver (instead of the vulnerable WinRing0, which Microsoft Defender flags).
   PawnIO is installed separately (pawnio.eu); without it CPU temperature is unavailable,
